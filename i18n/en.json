@@ -1,0 +1,53 @@
+{
+  "menu": {
+    "settings": "Widget settings"
+  },
+  "panel": {
+    "test": "This string is translated via the plugin API",
+    "open-settings": "Open Plugin Settings",
+    "subscription": {
+      "empty": "Please configure subscription URL in settings",
+      "loading": "Loading...",
+      "error": "Failed to fetch subscription info",
+      "noHeader": "Server did not return subscription info",
+      "noData": "Subscription data not available",
+      "expire": "Expires: "
+    },
+    "system-proxy": "System Proxy",
+    "tun": "TUN",
+    "tabs": {
+      "nodes": "Nodes",
+      "logs": "Logs",
+      "connections": "Connections"
+    },
+    "traffic": {
+      "title": "Traffic"
+    }
+  },
+  "settings": {
+    "iconColor": {
+      "desc": "Color of the bar widget icon.",
+      "label": "Icon color"
+    },
+    "message": {
+      "desc": "Custom message to display in the panel.",
+      "label": "Message",
+      "placeholder": "Enter a message..."
+    },
+    "subscriptionUrl": {
+      "desc": "Subscription URL for fetching Clashia proxy configurations.",
+      "label": "Subscription URL",
+      "placeholder": "https://example.com/subscribe?token=..."
+    },
+    "configPath": {
+      "desc": "Path to Clashia (Mihomo) configuration file.",
+      "label": "Config Path",
+      "placeholder": "~/.config/mihomo/config.yaml",
+      "browse": "Browse",
+      "dialogTitle": "Select Clashia Config File"
+    }
+  },
+  "widget": {
+    "tooltip": "Hello World"
+  }
+}

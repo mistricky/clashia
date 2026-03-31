@@ -1,0 +1,32 @@
+{
+  "panel": {
+    "test": "此字符串通过插件 API 进行翻译。",
+    "subscription": {
+      "empty": "请在设置中配置订阅链接",
+      "loading": "加载中...",
+      "error": "无法获取订阅信息",
+      "noHeader": "服务器未返回订阅信息",
+      "noData": "订阅数据暂不可用",
+      "expire": "到期: "
+    },
+    "system-proxy": "系统代理",
+    "tun": "TUN",
+    "traffic": {
+      "title": "流量"
+    }
+  },
+  "settings": {
+    "subscriptionUrl": {
+      "desc": "用于获取 Clashia 代理配置的订阅链接。",
+      "label": "订阅链接",
+      "placeholder": "https://example.com/subscribe?token=..."
+    },
+    "configPath": {
+      "desc": "Clashia (Mihomo) 配置文件路径。",
+      "label": "配置文件路径",
+      "placeholder": "~/.config/mihomo/config.yaml",
+      "browse": "浏览",
+      "dialogTitle": "选择 Clashia 配置文件"
+    }
+  }
+}
