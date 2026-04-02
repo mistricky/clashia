@@ -16,6 +16,7 @@ ColumnLayout {
   property string valueIconColor: cfg.iconColor ?? defaults.iconColor
   property string valueConfigPath: cfg.configPath ?? defaults.configPath
   property string valueSubscriptionUrl: cfg.subscriptionUrl ?? defaults.subscriptionUrl
+  property string valueDelayTestUrl: cfg.delayTestUrl ?? defaults.delayTestUrl ?? "https://www.gstatic.com/generate_204"
 
   spacing: Style.marginL
 
@@ -51,6 +52,15 @@ ColumnLayout {
       placeholderText: pluginApi?.tr("settings.subscriptionUrl.placeholder")
       text: root.valueSubscriptionUrl
       onTextChanged: root.valueSubscriptionUrl = text
+    }
+
+    NTextInput {
+      Layout.fillWidth: true
+      label: pluginApi?.tr("settings.delayTestUrl.label") || "Delay Test URL"
+      description: pluginApi?.tr("settings.delayTestUrl.desc") || "Used for node latency checks. Set this to the same URL used by Clash Verge if you want comparable results."
+      placeholderText: pluginApi?.tr("settings.delayTestUrl.placeholder") || "https://www.gstatic.com/generate_204"
+      text: root.valueDelayTestUrl
+      onTextChanged: root.valueDelayTestUrl = text
     }
 
     ColumnLayout {
@@ -126,6 +136,7 @@ ColumnLayout {
     pluginApi.pluginSettings.iconColor = root.valueIconColor;
     pluginApi.pluginSettings.configPath = root.valueConfigPath.trim();
     pluginApi.pluginSettings.subscriptionUrl = root.valueSubscriptionUrl.trim();
+    pluginApi.pluginSettings.delayTestUrl = root.valueDelayTestUrl.trim();
     pluginApi.saveSettings();
 
     Logger.d("Clashia", "Settings saved successfully");

@@ -11,9 +11,19 @@
       "error": "Failed to fetch subscription info",
       "noHeader": "Server did not return subscription info",
       "noData": "Subscription data not available",
-      "expire": "Expires: "
+      "expire": "Expires:",
+      "remaining": "Remaining",
+      "days": "days",
+      "upload": "Upload",
+      "download": "Download"
     },
     "system-proxy": "System Proxy",
+    "global-routing": "Global routing",
+    "routing-modes": {
+      "rule": "Rule",
+      "global": "Global",
+      "direct": "Direct"
+    },
     "tun": "TUN",
     "tabs": {
       "nodes": "Nodes",
@@ -48,6 +58,13 @@
     }
   },
   "widget": {
-    "tooltip": "Hello World"
+    "tooltip": "Hello World",
+    "runtime": {
+      "proxy": "Proxy",
+      "mode": "Mode",
+      "download": "Download",
+      "upload": "Upload",
+      "unknown": "Unknown"
+    }
   }
 }

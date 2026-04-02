@@ -15,6 +15,15 @@
       "title": "流量"
     }
   },
+  "widget": {
+    "runtime": {
+      "proxy": "节点",
+      "mode": "模式",
+      "download": "下载",
+      "upload": "上传",
+      "unknown": "未知"
+    }
+  },
   "settings": {
     "subscriptionUrl": {
       "desc": "用于获取 Clashia 代理配置的订阅链接。",

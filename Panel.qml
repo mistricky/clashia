@@ -5,6 +5,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Services.UI
 import qs.Widgets
+import "components"
 import "lib/js-yaml.js" as JsYaml
 
 // Panel Component
@@ -24,10 +25,13 @@ Item {
   property string mixedPort: ""
   property string externalController: ""
   property string apiSecret: ""
+  property var proxyGroupTestUrls: ({})
+  property var proxyProviderTestUrls: ({})
 
   // Clashia feature toggles
   property bool systemProxyEnabled: !!(cfg.systemProxyEnabled ?? false)
   property bool tunEnabled: false
+  property string globalRoutingMode: cfg.globalRoutingMode ?? defaults.globalRoutingMode ?? "rule"
 
   // Traffic monitoring (polled from shared pluginSettings, written by Main.qml)
   property real uploadSpeed: 0
@@ -69,12 +73,10 @@ Item {
   readonly property real subUpload: cfg.subUpload ?? defaults.subUpload ?? 0
   readonly property real subDownload: cfg.subDownload ?? defaults.subDownload ?? 0
   readonly property real subTotal: cfg.subTotal ?? defaults.subTotal ?? 0
-  readonly property int subExpire: cfg.subExpire ?? defaults.subExpire ?? 0
   readonly property bool hasSubData: subTotal > 0
 
   readonly property real subUsed: subUpload + subDownload
   readonly property real subUsedRatio: subTotal > 0 ? Math.min(1, subUsed / subTotal) : 0
-
   // SmartPanel
   readonly property var geometryPlaceholder: panelContainer
 
@@ -93,6 +95,7 @@ Item {
 
   Component.onCompleted: {
     if (pluginApi) {
+      root.restoreCurrentTab();
       Logger.i("Clashia", "Panel initialized");
       root.syncTrafficData();
     }
@@ -116,13 +119,10 @@ Item {
     running: false
   }
 
-  onTrafficAnimProgressChanged: {
-    trafficChart.requestPaint();
-  }
-
   onPluginApiChanged: {
     if (pluginApi) {
       Qt.callLater(function() {
+        root.restoreCurrentTab();
         // Re-apply system proxy on startup if it was enabled
         if (root.systemProxyEnabled) {
           setSystemProxyProcess.running = false;
@@ -154,6 +154,9 @@ Item {
           // Read TUN initial state from config
           if (parsed["tun"] && parsed["tun"]["enable"] !== undefined)
             root.tunEnabled = !!parsed["tun"]["enable"];
+
+          root.proxyGroupTestUrls = root.extractProxyGroupTestUrls(parsed);
+          root.proxyProviderTestUrls = root.extractProxyProviderTestUrls(parsed);
         }
 
         // Fetch live state from Clashia API
@@ -198,6 +201,13 @@ Item {
         var result = JSON.parse(fetchConfigProcess.outputBuffer);
         if (result["tun"] && result["tun"]["enable"] !== undefined)
           root.tunEnabled = !!result["tun"]["enable"];
+        if (result["mode"] !== undefined) {
+          root.globalRoutingMode = String(result["mode"]);
+          if (pluginApi) {
+            pluginApi.pluginSettings.globalRoutingMode = root.globalRoutingMode;
+            pluginApi.saveSettings();
+          }
+        }
         // system-proxy is not in clashia config, leave as-is
       } catch (e) {
         Logger.e("Clashia", "Failed to parse Clashia API response: " + e);
@@ -223,6 +233,28 @@ Item {
     onExited: (code, status) => {
       if (code !== 0)
         Logger.e("Clashia", "Failed to patch TUN setting");
+    }
+  }
+
+  Process {
+    id: patchRoutingModeProcess
+
+    command: {
+      if (!root.apiBaseUrl) return ["echo"];
+      var payload = JSON.stringify({ "mode": root.globalRoutingMode });
+      var args = ["curl", "-s", "-X", "PATCH", root.apiBaseUrl + "/configs", "-d", payload,
+                  "-H", "Content-Type: application/json", "--max-time", "5"];
+      if (root.apiSecret) args = args.concat(["-H", "Authorization: Bearer " + root.apiSecret]);
+      return args;
+    }
+
+    onExited: (code, status) => {
+      if (code !== 0) {
+        Logger.e("Clashia", "Failed to patch routing mode");
+        root.fetchClashiaConfig();
+      } else {
+        Logger.i("Clashia", "Routing mode set to " + root.globalRoutingMode);
+      }
     }
   }
 
@@ -362,400 +394,107 @@ Item {
         }
       }
 
-      // Tab bar
-      RowLayout {
-        Layout.fillWidth: true
-        spacing: 0
-
-        Repeater {
-          model: [
-            { label: pluginApi?.tr("panel.tabs.nodes") || "Nodes", index: 0 },
-            { label: pluginApi?.tr("panel.tabs.logs") || "Logs", index: 1 },
-            { label: pluginApi?.tr("panel.tabs.connections") || "Connections", index: 2 }
-          ]
-
-          delegate: Item {
-            Layout.fillWidth: true
-            implicitHeight: tabLabel.implicitHeight + Style.marginM * 2
-
-            required property var modelData
-
-            Rectangle {
-              anchors.fill: parent
-              color: root.currentTab === modelData.index ? Qt.alpha(Color.mPrimary, 0.1) : "transparent"
-              radius: Style.radiusM
-
-              NText {
-                id: tabLabel
-                anchors.centerIn: parent
-                text: modelData.label
-                font.pointSize: Style.fontSizeS
-                font.weight: root.currentTab === modelData.index ? Font.Bold : Font.Normal
-                color: root.currentTab === modelData.index ? Color.mPrimary : Color.mOnSurfaceVariant
-              }
-            }
-
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.currentTab = modelData.index
-            }
-
-            // Active indicator
-            Rectangle {
-              anchors.bottom: parent.bottom
-              anchors.horizontalCenter: parent.horizontalCenter
-              width: parent.width * 0.6
-              height: 2
-              radius: 1
-              color: Color.mPrimary
-              visible: root.currentTab === modelData.index
-            }
-          }
+      SubscriptionSummary {
+        hasSubscription: root.hasSubscription
+        hasSubData: root.hasSubData
+        emptyText: pluginApi?.tr("panel.subscription.empty") || "Please configure subscription URL in settings"
+        noDataText: pluginApi?.tr("panel.subscription.noData") || "Subscription data not available"
+        subscriptionName: root.subscriptionHost
+        usageText: root.formatBytes(root.subUsed) + " / " + root.formatBytes(root.subTotal)
+        progressValue: root.subUsedRatio
+      }
+ 
+ 
+      FeatureToggles {
+        systemProxyEnabled: root.systemProxyEnabled
+        tunEnabled: root.tunEnabled
+        systemProxyLabel: pluginApi?.tr("panel.system-proxy") || "System Proxy"
+        tunLabel: pluginApi?.tr("panel.tun") || "TUN"
+        globalRoutingLabel: pluginApi?.tr("panel.global-routing") || "Global routing"
+        globalRoutingMode: root.globalRoutingMode
+        globalRoutingModel: [
+          { key: "rule", label: pluginApi?.tr("panel.routing-modes.rule") || "Rule" },
+          { key: "global", label: pluginApi?.tr("panel.routing-modes.global") || "Global" },
+          { key: "direct", label: pluginApi?.tr("panel.routing-modes.direct") || "Direct" }
+        ]
+        onSystemProxyToggled: checked => {
+          root.systemProxyEnabled = checked;
+          pluginApi.pluginSettings.systemProxyEnabled = checked;
+          pluginApi.saveSettings();
+          setSystemProxyProcess.running = false;
+          setSystemProxyProcess.running = true;
+        }
+        onTunToggled: checked => {
+          root.tunEnabled = checked;
+          patchTunProcess.running = false;
+          patchTunProcess.running = true;
+        }
+        onGlobalRoutingSelected: key => {
+          root.globalRoutingMode = key;
+          pluginApi.pluginSettings.globalRoutingMode = key;
+          pluginApi.saveSettings();
+          patchRoutingModeProcess.running = false;
+          patchRoutingModeProcess.running = true;
         }
       }
 
-      // Subscription info card
-      Rectangle {
-        Layout.fillWidth: true
-        Layout.preferredHeight: subCardColumn.implicitHeight + Style.marginM * 2
-        color: Color.mSurfaceVariant
-        radius: Style.radiusM
-
-        ColumnLayout {
-          id: subCardColumn
-          anchors {
-            fill: parent
-            margins: Style.marginM
-          }
-          spacing: Style.marginS
-
-          // No subscription URL configured
-          NText {
-            visible: !root.hasSubscription
-            Layout.fillWidth: true
-            horizontalAlignment: Text.AlignHCenter
-            text: pluginApi?.tr("panel.subscription.empty") || "Please configure subscription URL in settings"
-            font.pointSize: Style.fontSizeS
-            color: Color.mOnSurfaceVariant
-          }
-
-          // Has subscription but no cached data yet
-          NText {
-            visible: root.hasSubscription && !root.hasSubData
-            Layout.fillWidth: true
-            horizontalAlignment: Text.AlignHCenter
-            text: pluginApi?.tr("panel.subscription.noData") || "Subscription data not available"
-            font.pointSize: Style.fontSizeS
-            color: Color.mOnSurfaceVariant
-          }
-
-          // Subscription data row
-          RowLayout {
-            visible: root.hasSubscription && root.hasSubData
-            Layout.fillWidth: true
-            spacing: Style.marginS
-
-            NIcon {
-              icon: "send"
-              pointSize: Style.fontSizeM
-              color: Color.mOnSurface
-            }
-
-            NText {
-              text: root.subscriptionHost
-              font.pointSize: Style.fontSizeS
-              font.weight: Font.Medium
-              color: Color.mOnSurface
-              Layout.fillWidth: true
-              elide: Text.ElideRight
-            }
-
-            NText {
-              text: root.formatBytes(root.subUsed) + " / " + root.formatBytes(root.subTotal)
-              font.pointSize: Style.fontSizeS
-              color: Color.mOnSurfaceVariant
-            }
-          }
-
-          // Progress bar
-          Rectangle {
-            visible: root.hasSubscription && root.hasSubData
-            Layout.fillWidth: true
-            Layout.preferredHeight: 6
-            radius: 3
-            color: Color.mSurface
-
-            Rectangle {
-              width: parent.width * root.subUsedRatio
-              height: parent.height
-              radius: parent.radius
-              color: Color.mPrimary
-
-              Behavior on width {
-                NumberAnimation { duration: 300; easing.type: Easing.OutCubic }
-              }
-            }
-          }
-
-          // Expire date
-          NText {
-            visible: root.hasSubscription && root.hasSubData && root.subExpire > 0
-            text: (pluginApi?.tr("panel.subscription.expire") || "Expires: ") + root.formatExpireDate(root.subExpire)
-            font.pointSize: Style.fontSizeS
-            color: Color.mOnSurfaceVariant
-          }
-        }
+      TrafficMonitor {
+        uploadSpeed: root.uploadSpeed
+        downloadSpeed: root.downloadSpeed
+        uploadHistory: root.uploadHistory
+        downloadHistory: root.downloadHistory
+        historyMax: root.trafficHistoryMax
+        peakSpeed: root.trafficPeakSpeed
+        animProgress: root.trafficAnimProgress
+        peakLabelText: root.formatSpeed(root.trafficPeakSpeed / 1.2)
+        uploadSpeedText: "↑ " + root.formatSpeed(root.uploadSpeed)
+        downloadSpeedText: "↓ " + root.formatSpeed(root.downloadSpeed)
       }
 
-
-      // Feature toggles
-      ColumnLayout {
+      Tabs {
         Layout.fillWidth: true
-        spacing: Style.marginXS
-
-        NToggle {
-          label: pluginApi?.tr("panel.system-proxy") || "System Proxy"
-          icon: "world"
-          checked: root.systemProxyEnabled
-          defaultValue: false
-          baseSize: Math.round(Style.baseWidgetSize * 0.6 * Style.uiScaleRatio)
-          Component.onCompleted: {
-            children[0].labelSize = Style.fontSizeS;
-            children[0].children[0].children[0].pointSize = Style.fontSizeS;
-            // Debug: dump NToggle child tree
-            function dumpTree(item, prefix) {
-              Logger.i("Clashia", prefix + item + " color=" + (item.color || "n/a") + " children=" + item.children.length);
-              for (var i = 0; i < item.children.length; i++) {
-                dumpTree(item.children[i], prefix + "  [" + i + "] ");
-              }
-            }
-            dumpTree(this, "NToggle ");
-          }
-          onToggled: checked => {
-            root.systemProxyEnabled = checked;
-            pluginApi.pluginSettings.systemProxyEnabled = checked;
+        currentIndex: root.currentTab
+        model: [
+          { label: pluginApi?.tr("panel.tabs.nodes") || "Nodes" },
+          { label: pluginApi?.tr("panel.tabs.logs") || "Logs" },
+          { label: pluginApi?.tr("panel.tabs.connections") || "Connections" }
+        ]
+        onActivated: index => {
+          var nextIndex = root.normalizeTabIndex(index);
+          root.currentTab = nextIndex;
+          if (pluginApi) {
+            pluginApi.pluginSettings.currentTab = nextIndex;
             pluginApi.saveSettings();
-            setSystemProxyProcess.running = false;
-            setSystemProxyProcess.running = true;
-          }
-        }
-
-        NToggle {
-          label: pluginApi?.tr("panel.tun") || "TUN"
-          icon: "shield"
-          checked: root.tunEnabled
-          defaultValue: false
-          baseSize: Math.round(Style.baseWidgetSize * 0.6 * Style.uiScaleRatio)
-          Component.onCompleted: {
-            children[0].labelSize = Style.fontSizeS;
-            children[0].children[0].children[0].pointSize = Style.fontSizeS;
-            var sw = children[1];
-            if (sw && sw.children[0]) {
-              sw.children[0].color = Qt.binding(function() {
-                return root.tunEnabled ? Color.mPrimary : Color.mSurfaceVariant;
-              });
-            }
-            if (sw && sw.children[1]) {
-              var thumb = sw.children[1];
-              thumb.color = Color.mSurfaceVariant;
-              thumb.onColorChanged.connect(function() {
-                if (thumb.color !== Color.mSurfaceVariant) {
-                  thumb.color = Color.mSurfaceVariant;
-                }
-              });
-            }
-          }
-          onToggled: checked => {
-            root.tunEnabled = checked;
-            patchTunProcess.running = false;
-            patchTunProcess.running = true;
           }
         }
       }
 
-      // Traffic monitor chart
-      Item {
+      LogsPanel {
         Layout.fillWidth: true
-        Layout.preferredHeight: 80
+        Layout.preferredHeight: visible ? implicitHeight : 0
+        visible: root.currentTab === 1
+        apiBaseUrl: root.apiBaseUrl
+        apiSecret: root.apiSecret
+      }
 
-        ColumnLayout {
-          anchors {
-            fill: parent
-          }
-          spacing: Style.marginS
+      ConnectionsPanel {
+        Layout.fillWidth: true
+        Layout.preferredHeight: visible ? implicitHeight : 0
+        visible: root.currentTab === 2
+        apiBaseUrl: root.apiBaseUrl
+        apiSecret: root.apiSecret
+      }
 
-          // Chart header
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.marginS
-
-            NText {
-              text: pluginApi?.tr("panel.traffic.title") || "Traffic"
-              font.pointSize: Style.fontSizeS
-              font.weight: Font.Medium
-              color: Color.mOnSurface
-            }
-
-            Item { Layout.fillWidth: true }
-
-            // Upload speed indicator
-            Rectangle {
-              Layout.preferredWidth: 8
-              Layout.preferredHeight: 8
-              radius: 4
-              color: "#4CAF50"
-            }
-
-            NText {
-              text: "↑ " + root.formatSpeed(root.uploadSpeed)
-              font.pointSize: Style.fontSizeS
-              color: Color.mOnSurfaceVariant
-            }
-
-            // Download speed indicator
-            Rectangle {
-              Layout.preferredWidth: 8
-              Layout.preferredHeight: 8
-              radius: 4
-              color: Color.mPrimary
-            }
-
-            NText {
-              text: "↓ " + root.formatSpeed(root.downloadSpeed)
-              font.pointSize: Style.fontSizeS
-              color: Color.mOnSurfaceVariant
-            }
-          }
-
-          // Canvas line chart
-          Canvas {
-            id: trafficChart
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.minimumHeight: 100
-            onPaint: {
-              var ctx = getContext("2d");
-              var w = width;
-              var h = height;
-              var progress = root.trafficAnimProgress;
-
-              ctx.clearRect(0, 0, w, h);
-
-              var upHist = root.uploadHistory;
-              var downHist = root.downloadHistory;
-              var maxPoints = root.trafficHistoryMax;
-              var peak = root.trafficPeakSpeed;
-
-              if (peak <= 0) peak = 1024;
-
-              // Draw grid lines
-              ctx.strokeStyle = Qt.rgba(Color.mOnSurfaceVariant.r, Color.mOnSurfaceVariant.g, Color.mOnSurfaceVariant.b, 0.15);
-              ctx.lineWidth = 1;
-
-              for (var gi = 1; gi <= 3; gi++) {
-                var gy = h - (h * gi / 4);
-
-                ctx.beginPath();
-                ctx.moveTo(0, gy);
-                ctx.lineTo(w, gy);
-                ctx.stroke();
-              }
-
-              // Helper: draw a line series with smooth scroll
-              // progress (0→1) shifts points left by one step width,
-              // creating a smooth sliding effect between data updates.
-              function drawLine(data, color) {
-                if (data.length < 2) return;
-
-                var step = w / (maxPoints - 1);
-                // Smooth scroll: shift all points left by progress * step
-                var scrollOffset = progress * step;
-                var baseOffset = (maxPoints - data.length) * step - scrollOffset;
-
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 1;
-                ctx.lineJoin = "round";
-                ctx.lineCap = "round";
-
-                // Clip to chart bounds
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(0, 0, w, h);
-                ctx.clip();
-
-                ctx.beginPath();
-
-                var firstX = 0;
-                var lastX = 0;
-
-                for (var i = 0; i < data.length; i++) {
-                  var x = baseOffset + i * step;
-                  var y = h - (data[i] / peak) * h;
-
-                  if (y < 0) y = 0;
-
-                  if (i === 0) {
-                    firstX = x;
-                    ctx.moveTo(x, y);
-                  } else {
-                    ctx.lineTo(x, y);
-                    lastX = x;
-                  }
-                }
-
-                ctx.stroke();
-
-                // Fill area under curve
-                ctx.lineTo(lastX, h);
-                ctx.lineTo(firstX, h);
-                ctx.closePath();
-
-                var parsed = Qt.color(color);
-                var gradient = ctx.createLinearGradient(0, 0, 0, h);
-                gradient.addColorStop(0, Qt.rgba(parsed.r, parsed.g, parsed.b, 0.2));
-                gradient.addColorStop(1, Qt.rgba(parsed.r, parsed.g, parsed.b, 0.02));
-                ctx.fillStyle = gradient;
-                ctx.fill();
-
-                ctx.restore();
-              }
-
-              // Draw download first (behind), then upload
-              drawLine(downHist, Color.mPrimary.toString());
-              drawLine(upHist, "#4CAF50");
-
-              // Fade edges: erase opacity at left and right with destination-out
-              var fadeW = w * 0.08;
-
-              ctx.save();
-              ctx.globalCompositeOperation = "destination-out";
-
-              // Left fade
-              var leftGrad = ctx.createLinearGradient(0, 0, fadeW, 0);
-              leftGrad.addColorStop(0, "rgba(0,0,0,1)");
-              leftGrad.addColorStop(1, "rgba(0,0,0,0)");
-              ctx.fillStyle = leftGrad;
-              ctx.fillRect(0, 0, fadeW, h);
-
-              // Right fade
-              var rightGrad = ctx.createLinearGradient(w - fadeW, 0, w, 0);
-              rightGrad.addColorStop(0, "rgba(0,0,0,0)");
-              rightGrad.addColorStop(1, "rgba(0,0,0,1)");
-              ctx.fillStyle = rightGrad;
-              ctx.fillRect(w - fadeW, 0, fadeW, h);
-
-              ctx.restore();
-            }
-          }
-
-          // Y-axis peak label
-          NText {
-            text: root.formatSpeed(root.trafficPeakSpeed / 1.2)
-            font.pointSize: Style.fontSizeS * 0.85
-            color: Qt.alpha(Color.mOnSurfaceVariant, 0.6)
-          }
-        }
+      NodePanel {
+        Layout.fillWidth: true
+        Layout.preferredHeight: visible ? implicitHeight : 0
+        visible: root.currentTab === 0
+        pluginApi: root.pluginApi
+        apiBaseUrl: root.apiBaseUrl
+        apiSecret: root.apiSecret
+        routingMode: root.globalRoutingMode
+        proxyGroupTestUrls: root.proxyGroupTestUrls
+        proxyProviderTestUrls: root.proxyProviderTestUrls
       }
     }
   }
@@ -768,6 +507,19 @@ Item {
     fetchConfigProcess.outputBuffer = "";
     fetchConfigProcess.running = false;
     fetchConfigProcess.running = true;
+  }
+
+  function restoreCurrentTab() {
+    var saved = pluginApi?.pluginSettings?.currentTab;
+    var fallback = defaults.currentTab ?? 0;
+    root.currentTab = root.normalizeTabIndex(saved ?? fallback);
+  }
+
+  function normalizeTabIndex(value) {
+    var idx = Number(value);
+    if (!isFinite(idx)) return 0;
+    idx = Math.floor(idx);
+    return Math.max(0, Math.min(2, idx));
   }
 
   function formatBytes(bytes) {
@@ -785,15 +537,6 @@ Item {
     return val.toFixed(i === 0 ? 0 : 1) + " " + units[i];
   }
 
-  function formatExpireDate(timestamp) {
-    if (timestamp <= 0) return "";
-
-    var d = new Date(timestamp * 1000);
-    var year = d.getFullYear();
-    var month = String(d.getMonth() + 1).padStart(2, "0");
-    var day = String(d.getDate()).padStart(2, "0");
-    return year + "-" + month + "-" + day;
-  }
   function formatSpeed(bytesPerSec) {
     if (bytesPerSec <= 0) return "0 B/s";
 
@@ -823,5 +566,40 @@ Item {
     trafficScrollAnim.stop();
     root.trafficAnimProgress = 0;
     trafficScrollAnim.start();
+  }
+
+  function extractProxyGroupTestUrls(parsed) {
+    var result = ({});
+    var groups = parsed?.["proxy-groups"];
+    if (!Array.isArray(groups))
+      return result;
+
+    for (var i = 0; i < groups.length; i++) {
+      var group = groups[i];
+      var name = String(group?.name ?? "").trim();
+      var url = String(group?.url ?? "").trim();
+      if (name && url)
+        result[name] = url;
+    }
+
+    return result;
+  }
+
+  function extractProxyProviderTestUrls(parsed) {
+    var result = ({});
+    var providers = parsed?.["proxy-providers"];
+    if (!providers || typeof providers !== "object")
+      return result;
+
+    var names = Object.keys(providers);
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i];
+      var provider = providers[name];
+      var url = String(provider?.["health-check"]?.url ?? "").trim();
+      if (name && url)
+        result[name] = url;
+    }
+
+    return result;
   }
 }
