@@ -55,8 +55,13 @@ Item {
 
   onApiBaseUrlChanged: {
     if (apiBaseUrl) {
+      trafficStateProcess.running = false;
+      trafficStateProcess.outputBuffer = "";
+      trafficStateProcess.running = true;
       root.refreshRuntimeState();
     } else {
+      trafficStateProcess.running = false;
+      trafficStateProcess.outputBuffer = "";
       root.currentProxyName = "";
       root.currentProxyChain = "";
       root.globalRoutingMode = "rule";
@@ -181,31 +186,38 @@ Item {
 
     command: {
       if (!root.apiBaseUrl) return ["echo"];
-      var args = ["curl", "-s", root.apiBaseUrl + "/traffic", "--max-time", "5"];
+      var args = ["curl", "-Ns", root.apiBaseUrl + "/traffic"];
       if (root.apiSecret) args = args.concat(["-H", "Authorization: Bearer " + root.apiSecret]);
       return args;
     }
 
-    stdout: SplitParser {
-      onRead: data => {
-        trafficStateProcess.outputBuffer += data;
+    stdout: StdioCollector {
+      waitForEnd: false
+
+      onDataChanged: {
+        trafficStateProcess.outputBuffer = text;
+
+        try {
+          var result = root.parseLatestTrafficPayload(text);
+          if (result)
+            root.updateTrafficState(result);
+        } catch (e) {
+          Logger.w("Clashia", "Main: Failed to parse streaming traffic state: " + e);
+        }
       }
     }
 
     onExited: (code, status) => {
-      if (code !== 0) {
-        trafficStateProcess.outputBuffer = "";
-        return;
-      }
-
-      try {
-        var result = JSON.parse(trafficStateProcess.outputBuffer || "{}");
-        root.updateTrafficState(result);
-      } catch (e) {
-        Logger.w("Clashia", "Main: Failed to parse traffic state: " + e);
-      }
-
       trafficStateProcess.outputBuffer = "";
+
+      if (root.apiBaseUrl) {
+        Logger.w("Clashia", "Main: Traffic stream exited (" + code + "), restarting");
+        Qt.callLater(function() {
+          if (!root.apiBaseUrl) return;
+          trafficStateProcess.running = false;
+          trafficStateProcess.running = true;
+        });
+      }
     }
   }
 
@@ -390,10 +402,6 @@ Item {
     proxiesStateProcess.running = false;
     proxiesStateProcess.outputBuffer = "";
     proxiesStateProcess.running = true;
-
-    trafficStateProcess.running = false;
-    trafficStateProcess.outputBuffer = "";
-    trafficStateProcess.running = true;
   }
 
   function updateTrafficState(result) {
@@ -415,6 +423,38 @@ Item {
       root.trafficPeak = Math.max(1024, root.trafficPeak * 0.92, observedPeak * 1.2);
 
     root.publishRuntimeState();
+  }
+
+  function parseLatestTrafficPayload(buffer) {
+    var text = String(buffer ?? "").trim();
+    if (text === "")
+      return null;
+
+    var depth = 0;
+    var start = -1;
+    var lastJson = "";
+
+    for (var i = 0; i < text.length; i++) {
+      var ch = text[i];
+      if (ch === "{") {
+        if (depth === 0)
+          start = i;
+        depth += 1;
+      } else if (ch === "}") {
+        if (depth <= 0)
+          continue;
+        depth -= 1;
+        if (depth === 0 && start >= 0) {
+          lastJson = text.slice(start, i + 1);
+          start = -1;
+        }
+      }
+    }
+
+    if (lastJson === "")
+      return null;
+
+    return JSON.parse(lastJson);
   }
 
   function pushTrafficSample(history, value) {

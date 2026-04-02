@@ -14,11 +14,11 @@ Item {
   property real peakSpeed: 1024
   property real animProgress: 1
   property int sampleIntervalMs: 1000
+  property double sampleStartedAt: Date.now()
+  property real smoothAnimProgress: 1
   property string peakLabelText: ""
   property string uploadSpeedText: ""
   property string downloadSpeedText: ""
-  property double sampleStartedAt: Date.now()
-  property real smoothAnimProgress: 1
   readonly property real chartHeight: 100
   readonly property real legendHeight: Math.max(8, Style.fontSizeS)
   readonly property real totalPreferredHeight: chartHeight + legendHeight + Style.marginS
@@ -28,8 +28,8 @@ Item {
   Layout.preferredHeight: totalPreferredHeight
 
   onAnimProgressChanged: trafficChart.requestPaint()
-  onUploadSpeedChanged: restartChartAnimation()
-  onDownloadSpeedChanged: restartChartAnimation()
+  onUploadSpeedChanged: trafficChart.requestPaint()
+  onDownloadSpeedChanged: trafficChart.requestPaint()
   onUploadHistoryChanged: restartChartAnimation()
   onDownloadHistoryChanged: restartChartAnimation()
   onPeakSpeedChanged: trafficChart.requestPaint()
@@ -73,15 +73,23 @@ Item {
         var w = width;
         var h = height;
         var progress = animationTimer.running ? root.smoothAnimProgress : root.animProgress;
+        var offsetProgress = progress;
 
         ctx.clearRect(0, 0, w, h);
 
-        var upHist = root.uploadHistory;
-        var downHist = root.downloadHistory;
-        var maxPoints = root.historyMax;
-        var peak = root.peakSpeed;
-
-        if (peak <= 0) peak = 1024;
+        var upHist = Array.isArray(root.uploadHistory) ? root.uploadHistory.slice(-root.historyMax) : [];
+        var downHist = Array.isArray(root.downloadHistory) ? root.downloadHistory.slice(-root.historyMax) : [];
+        var maxPoints = Math.max(2, root.historyMax);
+        var observedPeak = Math.max(
+          root.peakSpeed,
+          root.uploadSpeed,
+          root.downloadSpeed,
+          maxArray(upHist),
+          maxArray(downHist),
+          1024
+        );
+        var peak = niceCeil(observedPeak);
+        var step = w / (maxPoints - 1);
 
         ctx.strokeStyle = Qt.rgba(Color.mOnSurfaceVariant.r, Color.mOnSurfaceVariant.g, Color.mOnSurfaceVariant.b, 0.15);
         ctx.lineWidth = 1;
@@ -94,15 +102,42 @@ Item {
           ctx.stroke();
         }
 
-        function drawLine(data, color) {
+        function maxArray(data) {
+          var maxValue = 0;
+
+          for (var i = 0; i < data.length; i++) {
+            var value = Number(data[i] ?? 0);
+            if (isFinite(value) && value > maxValue)
+              maxValue = value;
+          }
+
+          return maxValue;
+        }
+
+        function niceCeil(value) {
+          if (!isFinite(value) || value <= 0)
+            return 1024;
+
+          var exponent = Math.floor(Math.log(value) / Math.LN10);
+          var base = Math.pow(10, exponent);
+          var normalized = value / base;
+          var stepValue = 10;
+
+          if (normalized <= 1)
+            stepValue = 1;
+          else if (normalized <= 2)
+            stepValue = 2;
+          else if (normalized <= 5)
+            stepValue = 5;
+
+          return stepValue * base;
+        }
+
+        function drawStaticLine(data, color) {
           if (data.length < 2) return;
 
-          var step = w / (maxPoints - 1);
-          var scrollOffset = progress * step;
-          var baseOffset = (maxPoints - data.length) * step - scrollOffset;
-
           ctx.strokeStyle = color;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = 1.5;
           ctx.lineJoin = "round";
           ctx.lineCap = "round";
 
@@ -115,12 +150,14 @@ Item {
 
           var firstX = 0;
           var lastX = 0;
+          var startX = w - step * (data.length - 1);
 
           for (var i = 0; i < data.length; i++) {
-            var x = baseOffset + i * step;
+            var x = startX + i * step;
             var y = h - (data[i] / peak) * h;
 
             if (y < 0) y = 0;
+            if (y > h) y = h;
 
             if (i === 0) {
               firstX = x;
@@ -132,22 +169,76 @@ Item {
           }
 
           ctx.stroke();
-          ctx.lineTo(lastX, h);
-          ctx.lineTo(firstX, h);
+          ctx.lineTo(Math.min(w, lastX), h);
+          ctx.lineTo(Math.max(0, firstX), h);
           ctx.closePath();
 
           var parsed = Qt.color(color);
           var gradient = ctx.createLinearGradient(0, 0, 0, h);
-          gradient.addColorStop(0, Qt.rgba(parsed.r, parsed.g, parsed.b, 0.2));
-          gradient.addColorStop(1, Qt.rgba(parsed.r, parsed.g, parsed.b, 0.02));
+          gradient.addColorStop(0, Qt.rgba(parsed.r, parsed.g, parsed.b, 0.18));
+          gradient.addColorStop(1, Qt.rgba(parsed.r, parsed.g, parsed.b, 0.01));
           ctx.fillStyle = gradient;
           ctx.fill();
 
           ctx.restore();
         }
 
-        drawLine(downHist, Color.mPrimary.toString());
-        drawLine(upHist, "#4CAF50");
+        function clampY(value) {
+          var y = h - (value / peak) * h;
+          if (y < 0) y = 0;
+          if (y > h) y = h;
+          return y;
+        }
+
+        function drawShiftedLine(data, color) {
+          if (data.length < 2) return;
+
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.lineJoin = "round";
+          ctx.lineCap = "round";
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(0, 0, w, h);
+          ctx.clip();
+
+          ctx.beginPath();
+
+          var firstX = 0;
+          var lastX = 0;
+          var startX = w - step * (data.length - 1) - offsetProgress * step;
+
+          for (var i = 0; i < data.length; i++) {
+            var x = startX + i * step;
+            var y = clampY(data[i]);
+
+            if (i === 0) {
+              firstX = x;
+              ctx.moveTo(x, y);
+            } else {
+              ctx.lineTo(x, y);
+              lastX = x;
+            }
+          }
+
+          ctx.stroke();
+          ctx.lineTo(Math.min(w, lastX), h);
+          ctx.lineTo(Math.max(0, firstX), h);
+          ctx.closePath();
+
+          var parsed = Qt.color(color);
+          var gradient = ctx.createLinearGradient(0, 0, 0, h);
+          gradient.addColorStop(0, Qt.rgba(parsed.r, parsed.g, parsed.b, 0.18));
+          gradient.addColorStop(1, Qt.rgba(parsed.r, parsed.g, parsed.b, 0.01));
+          ctx.fillStyle = gradient;
+          ctx.fill();
+
+          ctx.restore();
+        }
+
+        drawShiftedLine(downHist, Color.mPrimary.toString());
+        drawShiftedLine(upHist, "#4CAF50");
 
         var fadeW = w * 0.08;
 
