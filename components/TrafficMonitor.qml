@@ -13,9 +13,12 @@ Item {
   property int historyMax: 60
   property real peakSpeed: 1024
   property real animProgress: 1
+  property int sampleIntervalMs: 1000
   property string peakLabelText: ""
   property string uploadSpeedText: ""
   property string downloadSpeedText: ""
+  property double sampleStartedAt: Date.now()
+  property real smoothAnimProgress: 1
   readonly property real chartHeight: 100
   readonly property real legendHeight: Math.max(8, Style.fontSizeS)
   readonly property real totalPreferredHeight: chartHeight + legendHeight + Style.marginS
@@ -25,9 +28,34 @@ Item {
   Layout.preferredHeight: totalPreferredHeight
 
   onAnimProgressChanged: trafficChart.requestPaint()
-  onUploadHistoryChanged: trafficChart.requestPaint()
-  onDownloadHistoryChanged: trafficChart.requestPaint()
+  onUploadSpeedChanged: restartChartAnimation()
+  onDownloadSpeedChanged: restartChartAnimation()
+  onUploadHistoryChanged: restartChartAnimation()
+  onDownloadHistoryChanged: restartChartAnimation()
   onPeakSpeedChanged: trafficChart.requestPaint()
+
+  function restartChartAnimation() {
+    root.sampleStartedAt = Date.now();
+    root.smoothAnimProgress = 0;
+    animationTimer.start();
+    trafficChart.requestPaint();
+  }
+
+  Timer {
+    id: animationTimer
+    interval: 16
+    repeat: true
+    running: false
+
+    onTriggered: {
+      var elapsed = Date.now() - root.sampleStartedAt;
+      root.smoothAnimProgress = Math.max(0, Math.min(1, elapsed / Math.max(1, root.sampleIntervalMs)));
+      trafficChart.requestPaint();
+
+      if (root.smoothAnimProgress >= 1)
+        stop();
+    }
+  }
 
   ColumnLayout {
     anchors.fill: parent
@@ -38,11 +66,13 @@ Item {
       Layout.fillWidth: true
       Layout.fillHeight: true
       Layout.minimumHeight: 100
+      onWidthChanged: requestPaint()
+      onHeightChanged: requestPaint()
       onPaint: {
         var ctx = getContext("2d");
         var w = width;
         var h = height;
-        var progress = root.animProgress;
+        var progress = animationTimer.running ? root.smoothAnimProgress : root.animProgress;
 
         ctx.clearRect(0, 0, w, h);
 
