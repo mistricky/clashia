@@ -18,6 +18,7 @@ Item {
   readonly property string resolvedConfigPath: configPath.replace(/[\n\r]/g, "").trim().replace(/^~/, Quickshell.env("HOME") || "")
 
   readonly property string headerTmpPath: "/tmp/clashia-sub-headers.txt"
+  readonly property string configTmpPath: "/tmp/clashia-sub-config.yaml"
 
   // Clash config fields (parsed from yaml)
   property string externalController: ""
@@ -33,6 +34,12 @@ Item {
   property string currentProxyName: ""
   property string currentProxyChain: ""
   property string globalRoutingMode: "rule"
+  property real trafficUp: 0
+  property real trafficDown: 0
+  property var trafficUpHistory: []
+  property var trafficDownHistory: []
+  property real trafficPeak: 1024
+  readonly property int trafficHistoryMax: 60
 
   onPluginApiChanged: {
     if (pluginApi) {
@@ -53,8 +60,18 @@ Item {
       root.currentProxyName = "";
       root.currentProxyChain = "";
       root.globalRoutingMode = "rule";
+      root.resetTrafficState();
       root.publishRuntimeState();
     }
+  }
+
+  Timer {
+    id: runtimePollTimer
+    interval: 1000
+    repeat: true
+    running: !!root.apiBaseUrl
+    triggeredOnStart: true
+    onTriggered: root.refreshRuntimeState()
   }
 
   // Parse Clash config yaml for API connection info
@@ -158,6 +175,40 @@ Item {
     }
   }
 
+  Process {
+    id: trafficStateProcess
+    property string outputBuffer: ""
+
+    command: {
+      if (!root.apiBaseUrl) return ["echo"];
+      var args = ["curl", "-s", root.apiBaseUrl + "/traffic", "--max-time", "5"];
+      if (root.apiSecret) args = args.concat(["-H", "Authorization: Bearer " + root.apiSecret]);
+      return args;
+    }
+
+    stdout: SplitParser {
+      onRead: data => {
+        trafficStateProcess.outputBuffer += data;
+      }
+    }
+
+    onExited: (code, status) => {
+      if (code !== 0) {
+        trafficStateProcess.outputBuffer = "";
+        return;
+      }
+
+      try {
+        var result = JSON.parse(trafficStateProcess.outputBuffer || "{}");
+        root.updateTrafficState(result);
+      } catch (e) {
+        Logger.w("Clashia", "Main: Failed to parse traffic state: " + e);
+      }
+
+      trafficStateProcess.outputBuffer = "";
+    }
+  }
+
   // Subscription updater: GET request
   // -D <file>: dump response headers to temp file
   // -o <file>: write response body (yaml config) to configPath
@@ -167,9 +218,9 @@ Item {
     command: {
       if (!root.subscriptionUrl || !root.resolvedConfigPath) return ["echo"];
       return [
-        "curl", "-s",
+        "curl", "-s", "-f",
         "-D", root.headerTmpPath,
-        "-o", root.resolvedConfigPath,
+        "-o", root.configTmpPath,
         root.subscriptionUrl,
         "-A", "clash.meta",
         "--max-time", "30"
@@ -182,9 +233,50 @@ Item {
         return;
       }
 
-      Logger.i("Clashia", "Subscription config written to " + root.resolvedConfigPath);
-      // Now read the header file to parse subscription info
+      stagedConfigFileView.reload();
       headerFileView.reload();
+    }
+  }
+
+  FileView {
+    id: stagedConfigFileView
+    path: root.configTmpPath
+
+    onLoaded: {
+      try {
+        var parsed = JsYaml.jsyaml.load(this.text());
+        if (!root.isValidClashConfig(parsed)) {
+          Logger.w("Clashia", "Downloaded subscription payload is not a valid Clash config, keeping previous values");
+          return;
+        }
+
+        applySubscriptionProcess.running = false;
+        applySubscriptionProcess.running = true;
+      } catch (e) {
+        Logger.w("Clashia", "Downloaded subscription payload is not valid YAML, keeping previous values: " + e);
+      }
+    }
+
+    onLoadFailed: function(error) {
+      Logger.w("Clashia", "Failed to read staged subscription config: " + error);
+    }
+  }
+
+  Process {
+    id: applySubscriptionProcess
+
+    command: {
+      if (!root.resolvedConfigPath) return ["echo"];
+      return ["cp", root.configTmpPath, root.resolvedConfigPath];
+    }
+
+    onExited: (code, status) => {
+      if (code !== 0) {
+        Logger.w("Clashia", "Failed to apply staged subscription config (cp exit " + code + "), keeping previous values");
+        return;
+      }
+
+      Logger.i("Clashia", "Subscription config written to " + root.resolvedConfigPath);
     }
   }
 
@@ -224,6 +316,34 @@ Item {
     Logger.i("Clashia", "Refreshing subscription from " + root.subscriptionUrl);
     subscriptionProcess.running = false;
     subscriptionProcess.running = true;
+  }
+
+  function isValidClashConfig(parsed) {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return false;
+
+    var expectedKeys = [
+      "proxies",
+      "proxy-groups",
+      "rules",
+      "mixed-port",
+      "port",
+      "socks-port",
+      "redir-port",
+      "tproxy-port",
+      "external-controller",
+      "secret",
+      "mode",
+      "dns",
+      "tun"
+    ];
+
+    for (var i = 0; i < expectedKeys.length; i++) {
+      if (parsed[expectedKeys[i]] !== undefined)
+        return true;
+    }
+
+    return false;
   }
 
   function parseAndSaveSubscriptionInfo(userinfo) {
@@ -270,6 +390,47 @@ Item {
     proxiesStateProcess.running = false;
     proxiesStateProcess.outputBuffer = "";
     proxiesStateProcess.running = true;
+
+    trafficStateProcess.running = false;
+    trafficStateProcess.outputBuffer = "";
+    trafficStateProcess.running = true;
+  }
+
+  function updateTrafficState(result) {
+    var up = Number(result?.up ?? result?.upload ?? 0);
+    var down = Number(result?.down ?? result?.download ?? 0);
+
+    if (!isFinite(up) || up < 0) up = 0;
+    if (!isFinite(down) || down < 0) down = 0;
+
+    root.trafficUp = up;
+    root.trafficDown = down;
+    root.trafficUpHistory = root.pushTrafficSample(root.trafficUpHistory, up);
+    root.trafficDownHistory = root.pushTrafficSample(root.trafficDownHistory, down);
+
+    var observedPeak = Math.max(up, down, 1024);
+    if (observedPeak > root.trafficPeak)
+      root.trafficPeak = observedPeak * 1.2;
+    else
+      root.trafficPeak = Math.max(1024, root.trafficPeak * 0.92, observedPeak * 1.2);
+
+    root.publishRuntimeState();
+  }
+
+  function pushTrafficSample(history, value) {
+    var next = Array.isArray(history) ? history.slice(0) : [];
+    next.push(value);
+    if (next.length > root.trafficHistoryMax)
+      next = next.slice(next.length - root.trafficHistoryMax);
+    return next;
+  }
+
+  function resetTrafficState() {
+    root.trafficUp = 0;
+    root.trafficDown = 0;
+    root.trafficUpHistory = [];
+    root.trafficDownHistory = [];
+    root.trafficPeak = 1024;
   }
 
   function resolveCurrentProxyState(proxies) {
@@ -358,6 +519,11 @@ Item {
     pluginApi.pluginSettings._currentProxyName = root.currentProxyName;
     pluginApi.pluginSettings._currentProxyChain = root.currentProxyChain;
     pluginApi.pluginSettings._routingMode = root.globalRoutingMode;
+    pluginApi.pluginSettings._trafficUp = root.trafficUp;
+    pluginApi.pluginSettings._trafficDown = root.trafficDown;
+    pluginApi.pluginSettings._trafficUpHist = root.trafficUpHistory;
+    pluginApi.pluginSettings._trafficDownHist = root.trafficDownHistory;
+    pluginApi.pluginSettings._trafficPeak = root.trafficPeak;
   }
 
   IpcHandler {
