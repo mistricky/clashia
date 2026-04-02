@@ -56,6 +56,13 @@ Item {
     if (addr.indexOf("://") === -1) addr = "http://" + addr;
     return addr;
   }
+  readonly property string headerPortText: {
+    if (root.mixedPort !== "")
+      return "127.0.0.1:" + root.mixedPort;
+    if (!root.apiBaseUrl)
+      return "failed to connect mihomo api: " + root.externalController;
+    return "failed to read mixed-port from mihomo";
+  }
 
   // Subscription info (cached in pluginSettings by Main.qml)
   readonly property string subscriptionUrl: cfg.subscriptionUrl ?? defaults.subscriptionUrl ?? ""
@@ -142,9 +149,6 @@ Item {
         var parsed = JsYaml.jsyaml.load(this.text());
 
         if (parsed) {
-          if (parsed["mixed-port"] !== undefined)
-            root.mixedPort = String(parsed["mixed-port"]);
-
           if (parsed["external-controller"] !== undefined)
             root.externalController = String(parsed["external-controller"]);
 
@@ -193,12 +197,17 @@ Item {
 
     onExited: (code, status) => {
       if (code !== 0) {
+        root.mixedPort = "";
         Logger.w("Clashia", "Failed to fetch Clashia config via API (" + root.apiBaseUrl + "), is Clash running?");
         return;
       }
 
       try {
         var result = JSON.parse(fetchConfigProcess.outputBuffer);
+        if (result["mixed-port"] !== undefined && result["mixed-port"] !== null)
+          root.mixedPort = String(result["mixed-port"]);
+        else
+          root.mixedPort = "";
         if (result["tun"] && result["tun"]["enable"] !== undefined)
           root.tunEnabled = !!result["tun"]["enable"];
         if (result["mode"] !== undefined) {
@@ -210,6 +219,7 @@ Item {
         }
         // system-proxy is not in clashia config, leave as-is
       } catch (e) {
+        root.mixedPort = "";
         Logger.e("Clashia", "Failed to parse Clashia API response: " + e);
       }
 
@@ -386,7 +396,7 @@ Item {
             }
 
             NText {
-              text: root.mixedPort !== "" ? "127.0.0.1:" + root.mixedPort : "failed to read mixed-port from " + root.configPath
+              text: root.headerPortText
               font.pointSize: Style.fontSizeS
               color: Qt.alpha(Color.mOnSurface, 0.5)
             }
