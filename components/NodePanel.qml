@@ -17,6 +17,7 @@ Item {
   property string apiSecret: ""
   property string routingMode: "rule"
   property var proxyGroups: []
+  property var expandedGroupStates: ({})
   property var proxiesByName: ({})
   property var delayByKey: ({})
   property var testingByKey: ({})
@@ -309,7 +310,7 @@ Item {
 
             readonly property string groupName: modelData.name ?? ""
             readonly property var groupState: root.findGroup(groupName) ?? modelData
-            property bool expandedState: groupState?.autoExpanded ?? false
+            property bool expandedState: root.isGroupExpanded(groupName)
             readonly property string currentNodeName: groupState?.current ?? ""
             readonly property string delayText: root.formatGroupDelay(groupName, currentNodeName)
 
@@ -317,7 +318,7 @@ Item {
             implicitHeight: groupContent.implicitHeight
 
             onGroupStateChanged: {
-              var nextExpanded = groupState?.autoExpanded ?? false;
+              var nextExpanded = root.isGroupExpanded(groupName);
               if (expandedState !== nextExpanded)
                 expandedState = nextExpanded;
             }
@@ -842,6 +843,7 @@ Item {
     root.errorText = "";
     root.infoText = "";
     root.proxyGroups = [];
+    root.expandedGroupStates = ({});
     root.proxiesByName = ({});
     root.delayByKey = ({});
     root.testingByKey = ({});
@@ -919,14 +921,7 @@ Item {
     root.proxiesByName = proxies;
     var names = Object.keys(proxies);
     var groups = [];
-    var expandedByName = ({});
-
-    for (var expandedIndex = 0; expandedIndex < root.proxyGroups.length; expandedIndex++) {
-      var expandedGroup = root.proxyGroups[expandedIndex];
-      var expandedName = expandedGroup?.name ?? "";
-      if (expandedName)
-        expandedByName[expandedName] = expandedGroup?.autoExpanded ?? false;
-    }
+    var expandedByName = Object.assign({}, root.expandedGroupStates);
 
     for (var i = 0; i < names.length; i++) {
       var name = names[i];
@@ -941,7 +936,6 @@ Item {
         type: entry.type ?? "",
         current: entry.now ?? "",
         all: entry.all,
-        autoExpanded: expandedByName[name] ?? false,
         nodes: root.buildGroupNodes(name, entry, proxies)
       });
     }
@@ -953,6 +947,7 @@ Item {
     });
 
     root.proxyGroups = groups;
+    root.expandedGroupStates = expandedByName;
     root.restoreDelayCache();
     Qt.callLater(function() {
     root.queueAllDelayTests(false, false);
@@ -1248,17 +1243,16 @@ Item {
   }
 
   function updateGroupExpandedState(name, expanded) {
-    var index = findGroupIndex(name);
-    if (index < 0) return;
+    if (!name) return;
+    if ((root.expandedGroupStates?.[name] ?? false) === expanded) return;
 
-    var groups = root.proxyGroups.slice();
-    var group = groups[index];
-    if ((group.autoExpanded ?? false) === expanded) return;
-
-    groups[index] = Object.assign({}, group, {
-      autoExpanded: expanded
+    root.expandedGroupStates = Object.assign({}, root.expandedGroupStates, {
+      [name]: expanded
     });
-    root.proxyGroups = groups;
+  }
+
+  function isGroupExpanded(name) {
+    return root.expandedGroupStates?.[name] ?? false;
   }
 
   function findGroupIndex(name) {
@@ -1404,7 +1398,7 @@ Item {
       if (!root.testingByKey?.[groupKey])
         root.startDelayTest("group", groupName, groupKey, manual, manual ? "header" : "silent");
 
-      if (!(group?.autoExpanded ?? false)) continue;
+      if (!root.isGroupExpanded(groupName)) continue;
 
       var nodes = group?.nodes ?? [];
       for (var nodeIndex = 0; nodeIndex < nodes.length; nodeIndex++) {
