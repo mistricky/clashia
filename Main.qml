@@ -30,13 +30,9 @@ Item {
     return addr;
   }
 
-  // Traffic monitoring (persistent across panel open/close)
-  property real uploadSpeed: 0
-  property real downloadSpeed: 0
-  property var uploadHistory: []
-  property var downloadHistory: []
-  readonly property int trafficHistoryMax: 60
-  property real trafficPeakSpeed: 1024
+  property string currentProxyName: ""
+  property string currentProxyChain: ""
+  property string globalRoutingMode: "rule"
 
   onPluginApiChanged: {
     if (pluginApi) {
@@ -44,13 +40,20 @@ Item {
         if (root.hasSubscription && root.resolvedConfigPath) {
           root.refreshSubscription();
         }
+
+        root.publishRuntimeState();
       });
     }
   }
 
   onApiBaseUrlChanged: {
     if (apiBaseUrl) {
-      root.startTrafficStream();
+      root.refreshRuntimeState();
+    } else {
+      root.currentProxyName = "";
+      root.currentProxyChain = "";
+      root.globalRoutingMode = "rule";
+      root.publishRuntimeState();
     }
   }
 
@@ -82,79 +85,77 @@ Item {
     }
   }
 
-  // Stream /traffic for real-time speed data
   Process {
-    id: trafficProcess
+    id: configStateProcess
+    property string outputBuffer: ""
 
     command: {
       if (!root.apiBaseUrl) return ["echo"];
-      var args = ["curl", "-s", "-N", root.apiBaseUrl + "/traffic"];
+      var args = ["curl", "-s", root.apiBaseUrl + "/configs", "--max-time", "5"];
       if (root.apiSecret) args = args.concat(["-H", "Authorization: Bearer " + root.apiSecret]);
       return args;
     }
 
     stdout: SplitParser {
       onRead: data => {
-        try {
-          var parsed = JSON.parse(data);
-          var up = parsed.up || 0;
-          var down = parsed.down || 0;
-
-          root.uploadSpeed = up;
-          root.downloadSpeed = down;
-
-          var upHist = root.uploadHistory.slice();
-          var downHist = root.downloadHistory.slice();
-
-          upHist.push(up);
-          downHist.push(down);
-
-          if (upHist.length > root.trafficHistoryMax)
-            upHist.shift();
-
-          if (downHist.length > root.trafficHistoryMax)
-            downHist.shift();
-
-          // Update peak for Y-axis scaling
-          var peak = 1024;
-
-          for (var i = 0; i < upHist.length; i++) {
-            if (upHist[i] > peak) peak = upHist[i];
-          }
-
-          for (var j = 0; j < downHist.length; j++) {
-            if (downHist[j] > peak) peak = downHist[j];
-          }
-
-          root.trafficPeakSpeed = peak * 1.2;
-          root.uploadHistory = upHist;
-          root.downloadHistory = downHist;
-
-          // Share to pluginSettings for Panel to read (no saveSettings — transient)
-          if (pluginApi) {
-            pluginApi.pluginSettings._trafficUp = up;
-            pluginApi.pluginSettings._trafficDown = down;
-            pluginApi.pluginSettings._trafficUpHist = upHist;
-            pluginApi.pluginSettings._trafficDownHist = downHist;
-            pluginApi.pluginSettings._trafficPeak = root.trafficPeakSpeed;
-          }
-        } catch (e) {
-          // Ignore malformed lines
-        }
+        configStateProcess.outputBuffer += data;
       }
     }
 
     onExited: (code, status) => {
-      // Restart streaming after disconnect (backoff 2s)
-      trafficRestartTimer.restart();
+      if (code !== 0) {
+        configStateProcess.outputBuffer = "";
+        return;
+      }
+
+      try {
+        var result = JSON.parse(configStateProcess.outputBuffer);
+        if (result["mode"] !== undefined)
+          root.globalRoutingMode = String(result["mode"]);
+        root.publishRuntimeState();
+      } catch (e) {
+        Logger.w("Clashia", "Main: Failed to parse config state: " + e);
+      }
+
+      configStateProcess.outputBuffer = "";
     }
   }
 
-  Timer {
-    id: trafficRestartTimer
-    interval: 2000
-    repeat: false
-    onTriggered: root.startTrafficStream()
+  Process {
+    id: proxiesStateProcess
+    property string outputBuffer: ""
+
+    command: {
+      if (!root.apiBaseUrl) return ["echo"];
+      var args = ["curl", "-s", root.apiBaseUrl + "/proxies", "--max-time", "5"];
+      if (root.apiSecret) args = args.concat(["-H", "Authorization: Bearer " + root.apiSecret]);
+      return args;
+    }
+
+    stdout: SplitParser {
+      onRead: data => {
+        proxiesStateProcess.outputBuffer += data;
+      }
+    }
+
+    onExited: (code, status) => {
+      if (code !== 0) {
+        proxiesStateProcess.outputBuffer = "";
+        return;
+      }
+
+      try {
+        var result = JSON.parse(proxiesStateProcess.outputBuffer);
+        var proxyState = root.resolveCurrentProxyState(result?.proxies ?? ({}));
+        root.currentProxyName = proxyState.name;
+        root.currentProxyChain = proxyState.chain;
+        root.publishRuntimeState();
+      } catch (e) {
+        Logger.w("Clashia", "Main: Failed to parse proxies state: " + e);
+      }
+
+      proxiesStateProcess.outputBuffer = "";
+    }
   }
 
   // Subscription updater: GET request
@@ -252,10 +253,89 @@ Item {
     pluginApi.pluginSettings.subDownload = download;
     pluginApi.pluginSettings.subTotal = total;
     pluginApi.pluginSettings.subExpire = expire;
+    pluginApi.pluginSettings.subUpdatedAt = Math.floor(Date.now() / 1000);
     pluginApi.saveSettings();
 
     Logger.i("Clashia", "Subscription info cached: " +
       formatBytes(upload + download) + " / " + formatBytes(total));
+  }
+
+  function refreshRuntimeState() {
+    if (!root.apiBaseUrl) return;
+
+    configStateProcess.running = false;
+    configStateProcess.outputBuffer = "";
+    configStateProcess.running = true;
+
+    proxiesStateProcess.running = false;
+    proxiesStateProcess.outputBuffer = "";
+    proxiesStateProcess.running = true;
+  }
+
+  function resolveCurrentProxyState(proxies) {
+    var groupName = "GLOBAL";
+    var globalGroup = proxies["GLOBAL"];
+
+    if (!globalGroup || !globalGroup.now) {
+      var names = Object.keys(proxies);
+
+      for (var i = 0; i < names.length; i++) {
+        var name = names[i];
+        var entry = proxies[name];
+        if (!entry || !entry.all || !Array.isArray(entry.all) || entry.all.length === 0) continue;
+        if (!root.isSelectableGroup(entry.type)) continue;
+        groupName = name;
+        globalGroup = entry;
+        break;
+      }
+    }
+
+    var current = globalGroup?.now ?? "";
+    var trace = root.resolveProxyTrace(current, proxies);
+
+    return {
+      name: trace.finalName || current || "",
+      chain: trace.chainText || groupName
+    };
+  }
+
+  function resolveProxyTrace(name, proxies) {
+    var result = {
+      finalName: "",
+      chainText: ""
+    };
+    if (!name) return result;
+
+    var seen = ({});
+    var chain = [];
+    var current = name;
+
+    while (current && !seen[current]) {
+      seen[current] = true;
+      chain.push(current);
+
+      var entry = proxies[current];
+      if (!entry) break;
+
+      var next = entry.now;
+      if (!next || next === current) break;
+      current = next;
+    }
+
+    result.finalName = chain.length > 0 ? chain[chain.length - 1] : name;
+    result.chainText = chain.join(" -> ");
+    return result;
+  }
+
+  function isSelectableGroup(type) {
+    var normalized = String(type ?? "").toLowerCase();
+    return normalized === "selector" ||
+      normalized === "select" ||
+      normalized === "urltest" ||
+      normalized === "fallback" ||
+      normalized === "loadbalance" ||
+      normalized === "load-balance" ||
+      normalized === "relay";
   }
 
   function formatBytes(bytes) {
@@ -273,11 +353,11 @@ Item {
     return val.toFixed(i === 0 ? 0 : 1) + " " + units[i];
   }
 
-  function startTrafficStream() {
-    if (!root.apiBaseUrl) return;
-
-    trafficProcess.running = false;
-    trafficProcess.running = true;
+  function publishRuntimeState() {
+    if (!pluginApi) return;
+    pluginApi.pluginSettings._currentProxyName = root.currentProxyName;
+    pluginApi.pluginSettings._currentProxyChain = root.currentProxyChain;
+    pluginApi.pluginSettings._routingMode = root.globalRoutingMode;
   }
 
   IpcHandler {

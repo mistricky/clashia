@@ -10,34 +10,39 @@ DraggableDesktopWidget {
 
   readonly property var cfg: pluginApi?.pluginSettings ?? ({})
   readonly property var defaults: pluginApi?.manifest?.metadata?.defaultSettings ?? ({})
+  readonly property string currentProxyName: cfg._currentProxyName ?? (pluginApi?.tr("widget.runtime.unknown") || "Unknown")
+  readonly property string routingMode: cfg._routingMode ?? "rule"
 
-  readonly property string message: widgetData.message ?? cfg.message ?? defaults.message ?? "Hello World"
-
-  implicitWidth: 200
-  implicitHeight: 120
+  implicitWidth: 240
+  implicitHeight: 96
 
   ColumnLayout {
     anchors.fill: parent
     anchors.margins: Style.marginL
     spacing: Style.marginS
 
-    NIcon {
-      icon: "noctalia"
-      pointSize: Style.fontSizeXXL
-      Layout.alignment: Qt.AlignHCenter
-    }
-
     NText {
-      text: root.message
+      text: root.currentProxyName
       font.pointSize: Style.fontSizeM
       Layout.alignment: Qt.AlignHCenter
+      elide: Text.ElideRight
+      Layout.fillWidth: true
+      horizontalAlignment: Text.AlignHCenter
     }
 
     NText {
-      text: "Desktop Widget"
+      text: (pluginApi?.tr("widget.runtime.mode") || "Mode") + ": " + root.formatMode(root.routingMode)
       font.pointSize: Style.fontSizeS
       color: Color.mOnSurfaceVariant
       Layout.alignment: Qt.AlignHCenter
     }
   }
+
+  function formatMode(mode) {
+    var normalized = String(mode ?? "rule").toLowerCase();
+    if (normalized === "global") return pluginApi?.tr("panel.routing-modes.global") || "Global";
+    if (normalized === "direct") return pluginApi?.tr("panel.routing-modes.direct") || "Direct";
+    return pluginApi?.tr("panel.routing-modes.rule") || "Rule";
+  }
+
 }
