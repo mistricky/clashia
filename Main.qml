@@ -44,7 +44,7 @@ Item {
   onPluginApiChanged: {
     if (pluginApi) {
       Qt.callLater(function() {
-        if (root.hasSubscription && root.resolvedConfigPath) {
+        if (root.hasSubscription) {
           root.refreshSubscription();
         }
 
@@ -191,18 +191,15 @@ Item {
       return args;
     }
 
-    stdout: StdioCollector {
-      waitForEnd: false
-
-      onDataChanged: {
-        trafficStateProcess.outputBuffer = text;
+    stdout: SplitParser {
+      onRead: data => {
+        trafficStateProcess.outputBuffer += String(data ?? "");
 
         try {
-          var result = root.parseLatestTrafficPayload(text);
-          if (result)
-            root.updateTrafficState(result);
+          root.consumeTrafficBuffer();
         } catch (e) {
           Logger.w("Clashia", "Main: Failed to parse streaming traffic state: " + e);
+          trafficStateProcess.outputBuffer = root.trimTrafficBufferTail(trafficStateProcess.outputBuffer);
         }
       }
     }
@@ -223,12 +220,12 @@ Item {
 
   // Subscription updater: GET request
   // -D <file>: dump response headers to temp file
-  // -o <file>: write response body (yaml config) to configPath
+  // -o <file>: write response body to a temp file for validation only
   Process {
     id: subscriptionProcess
 
     command: {
-      if (!root.subscriptionUrl || !root.resolvedConfigPath) return ["echo"];
+      if (!root.subscriptionUrl) return ["echo"];
       return [
         "curl", "-s", "-f",
         "-D", root.headerTmpPath,
@@ -261,9 +258,7 @@ Item {
           Logger.w("Clashia", "Downloaded subscription payload is not a valid Clash config, keeping previous values");
           return;
         }
-
-        applySubscriptionProcess.running = false;
-        applySubscriptionProcess.running = true;
+        Logger.i("Clashia", "Subscription payload validated, preserving existing config file at " + root.resolvedConfigPath);
       } catch (e) {
         Logger.w("Clashia", "Downloaded subscription payload is not valid YAML, keeping previous values: " + e);
       }
@@ -271,24 +266,6 @@ Item {
 
     onLoadFailed: function(error) {
       Logger.w("Clashia", "Failed to read staged subscription config: " + error);
-    }
-  }
-
-  Process {
-    id: applySubscriptionProcess
-
-    command: {
-      if (!root.resolvedConfigPath) return ["echo"];
-      return ["cp", root.configTmpPath, root.resolvedConfigPath];
-    }
-
-    onExited: (code, status) => {
-      if (code !== 0) {
-        Logger.w("Clashia", "Failed to apply staged subscription config (cp exit " + code + "), keeping previous values");
-        return;
-      }
-
-      Logger.i("Clashia", "Subscription config written to " + root.resolvedConfigPath);
     }
   }
 
@@ -425,17 +402,19 @@ Item {
     root.publishRuntimeState();
   }
 
-  function parseLatestTrafficPayload(buffer) {
-    var text = String(buffer ?? "").trim();
+  function consumeTrafficBuffer() {
+    var text = String(trafficStateProcess.outputBuffer ?? "");
     if (text === "")
-      return null;
+      return;
 
     var depth = 0;
     var start = -1;
-    var lastJson = "";
+    var lastParsed = null;
+    var processedUntil = -1;
 
     for (var i = 0; i < text.length; i++) {
       var ch = text[i];
+
       if (ch === "{") {
         if (depth === 0)
           start = i;
@@ -443,18 +422,36 @@ Item {
       } else if (ch === "}") {
         if (depth <= 0)
           continue;
+
         depth -= 1;
+
         if (depth === 0 && start >= 0) {
-          lastJson = text.slice(start, i + 1);
+          lastParsed = JSON.parse(text.slice(start, i + 1));
+          processedUntil = i + 1;
           start = -1;
         }
       }
     }
 
-    if (lastJson === "")
-      return null;
+    if (lastParsed)
+      root.updateTrafficState(lastParsed);
 
-    return JSON.parse(lastJson);
+    if (processedUntil >= 0)
+      trafficStateProcess.outputBuffer = text.slice(processedUntil);
+    else
+      trafficStateProcess.outputBuffer = root.trimTrafficBufferTail(text);
+  }
+
+  function trimTrafficBufferTail(buffer) {
+    var text = String(buffer ?? "");
+    if (text.length <= 8192)
+      return text;
+
+    var start = text.lastIndexOf("{");
+    if (start >= 0)
+      return text.slice(start);
+
+    return text.slice(-8192);
   }
 
   function pushTrafficSample(history, value) {

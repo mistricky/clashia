@@ -768,6 +768,7 @@ Item {
       var args = [
         "curl",
         "-s",
+        "-f",
         "-X", "PUT",
         root.apiBaseUrl + "/proxies/" + groupPath,
         "-d", payload,
@@ -1073,46 +1074,28 @@ Item {
   }
 
   function buildGlobalNodes(groups) {
-    var nodesResult = [];
-    var groupsResult = [];
+    var result = [];
+    var globalGroup = root.effectiveGlobalGroup;
+    var globalItems = Array.isArray(globalGroup?.all) ? globalGroup.all : [];
     var selectedName = root.effectiveGlobalCurrent;
-    var seenGroups = ({});
-    var seenNodes = ({});
 
-    for (var i = 0; i < groups.length; i++) {
-      var group = groups[i];
-      var groupName = group?.name ?? "";
-      var nodes = group?.nodes ?? [];
-      for (var j = 0; j < nodes.length; j++) {
-        var node = nodes[j];
-        var name = node?.name ?? "";
-        if (!name || seenNodes[name]) continue;
-        seenNodes[name] = true;
+    for (var i = 0; i < globalItems.length; i++) {
+      var name = globalItems[i];
+      if (!name) continue;
 
-        nodesResult.push({
-          kind: "node",
-          name: name,
-          groupLabel: "Node",
-          switchGroupName: "GLOBAL",
-          selectable: node.selectable ?? true,
-          current: name === selectedName
-        });
-      }
-
-      if (groupName && groupName !== "GLOBAL" && !seenGroups[groupName] && !seenNodes[groupName]) {
-        seenGroups[groupName] = true;
-        groupsResult.push({
-          kind: "group",
-          name: groupName,
-          groupLabel: String(group?.type ?? "Group"),
-          switchGroupName: "GLOBAL",
-          selectable: true,
-          current: groupName === selectedName
-        });
-      }
+      var entry = root.proxiesByName?.[name] ?? ({});
+      var isGroup = root.isSelectableGroup(entry?.type ?? "");
+      result.push({
+        kind: isGroup ? "group" : "node",
+        name: name,
+        groupLabel: isGroup ? String(entry?.type ?? "Group") : "Node",
+        switchGroupName: "GLOBAL",
+        selectable: true,
+        current: name === selectedName
+      });
     }
 
-    return nodesResult.concat(groupsResult);
+    return result;
   }
 
   function sortGlobalNodes(nodes) {
