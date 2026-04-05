@@ -491,6 +491,7 @@ Item {
         Layout.fillWidth: true
         Layout.preferredHeight: visible ? implicitHeight : 0
         visible: root.currentTab === 2
+        pluginApi: root.pluginApi
         apiBaseUrl: root.apiBaseUrl
         apiSecret: root.apiSecret
       }

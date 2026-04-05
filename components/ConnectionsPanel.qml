@@ -7,6 +7,7 @@ import qs.Widgets
 Item {
   id: root
 
+  property var pluginApi: null
   property string apiBaseUrl: ""
   property string apiSecret: ""
   property bool loading: false
@@ -18,8 +19,12 @@ Item {
   property real downloadTotal: 0
   property int activeConnectionCount: 0
   property string memoryText: ""
+  property var processIconCache: ({})
+  property var pendingIconLookups: []
+  property string currentLookupProcess: ""
 
   readonly property bool hasApi: apiBaseUrl !== ""
+  readonly property var proxyTraceByName: pluginApi?.pluginSettings?._proxyTraceByName || ({})
   readonly property string requestUrl: hasApi ? apiBaseUrl + "/connections" : ""
   readonly property color panelColor: Qt.alpha(Color.mOnSurface, Settings.data.colorSchemes.darkMode ? 0.05 : 0.035)
   readonly property color borderColor: Qt.alpha(Color.mOnSurface, Settings.data.colorSchemes.darkMode ? 0.08 : 0.06)
@@ -66,100 +71,7 @@ Item {
   ColumnLayout {
     anchors.fill: parent
     anchors.margins: Style.marginM
-    spacing: Style.marginM
-
-    RowLayout {
-      Layout.fillWidth: true
-      spacing: Style.marginS
-
-      NText {
-        text: "Connections"
-        font.pointSize: Style.fontSizeS
-        font.weight: Font.DemiBold
-        color: Color.mOnSurface
-      }
-
-      Item {
-        Layout.fillWidth: true
-      }
-
-      Rectangle {
-        Layout.preferredWidth: 30 * Style.uiScaleRatio
-        Layout.preferredHeight: 30 * Style.uiScaleRatio
-        radius: Style.radiusM
-        color: refreshArea.containsMouse && !root.loading ? Qt.alpha(Color.mOnSurface, 0.08) : "transparent"
-        border.color: Qt.alpha(Color.mOnSurface, 0.08)
-        border.width: 1
-        opacity: root.hasApi ? 1 : 0.45
-
-        NIcon {
-          anchors.centerIn: parent
-          icon: "refresh-cw"
-          pointSize: Math.round(Style.fontSizeS)
-          color: Color.mOnSurface
-          opacity: root.loading ? 1 : 0.8
-        }
-
-        MouseArea {
-          id: refreshArea
-
-          anchors.fill: parent
-          enabled: root.hasApi && !root.loading
-          hoverEnabled: true
-          cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-          onClicked: root.refresh()
-        }
-      }
-    }
-
-    RowLayout {
-      Layout.fillWidth: true
-      spacing: Style.marginS
-
-      Repeater {
-        model: [
-          { label: "Active", value: String(root.activeConnectionCount) },
-          { label: "Upload", value: root.formatBytes(root.uploadTotal) },
-          { label: "Download", value: root.formatBytes(root.downloadTotal) },
-          { label: "Memory", value: root.memoryText || "0 B" }
-        ]
-
-        delegate: Rectangle {
-          required property var modelData
-
-          Layout.fillWidth: true
-          implicitHeight: summaryColumn.implicitHeight + Style.marginM * 2
-          radius: Style.radiusM
-          color: root.itemColor
-          border.color: root.itemBorderColor
-          border.width: 1
-
-          ColumnLayout {
-            id: summaryColumn
-
-            anchors.fill: parent
-            anchors.leftMargin: Style.marginM
-            anchors.rightMargin: Style.marginM
-            anchors.topMargin: Style.marginM
-            anchors.bottomMargin: Style.marginM
-            spacing: Style.marginXS
-
-            NText {
-              text: modelData.label
-              font.pointSize: Style.fontSizeS * 0.88
-              color: Qt.alpha(Color.mOnSurface, 0.6)
-            }
-
-            NText {
-              text: modelData.value
-              font.pointSize: Style.fontSizeS
-              font.weight: Font.DemiBold
-              color: Color.mOnSurface
-            }
-          }
-        }
-      }
-    }
+    spacing: 0
 
     Loader {
       Layout.fillWidth: true
@@ -260,89 +172,100 @@ Item {
   Component {
     id: listState
 
-    Flickable {
-      id: connectionsFlickable
+    ListView {
+      id: connectionsList
 
       clip: true
       boundsBehavior: Flickable.StopAtBounds
-      contentWidth: width
-      contentHeight: connectionsColumn.implicitHeight
+      spacing: Style.marginXS
+      model: root.connectionItems
+      reuseItems: true
+      cacheBuffer: 256 * Style.uiScaleRatio
 
-      Column {
-        id: connectionsColumn
+      delegate: Rectangle {
+        required property var modelData
 
-        width: connectionsFlickable.width
-        spacing: Style.marginXS
+        readonly property var itemData: modelData
 
-        Repeater {
-          model: root.connectionItems
+        width: connectionsList.width
+        implicitHeight: 58 * Style.uiScaleRatio
+        radius: Style.radiusM
+        color: root.itemColor
+        border.color: root.itemBorderColor
+        border.width: 1
 
-          delegate: Rectangle {
-            required property var modelData
+        ColumnLayout {
+          anchors.fill: parent
+          anchors.leftMargin: Style.marginM
+          anchors.rightMargin: Style.marginM
+          spacing: 0
 
-            width: connectionsColumn.width
-            implicitHeight: connectionColumn.implicitHeight + Style.marginM * 2
-            radius: Style.radiusM
-            color: root.itemColor
-            border.color: root.itemBorderColor
-            border.width: 1
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.marginM
 
-            ColumnLayout {
-              id: connectionColumn
+            Item {
+              Layout.alignment: Qt.AlignVCenter
+              Layout.preferredWidth: 18 * Style.uiScaleRatio
+              Layout.preferredHeight: 18 * Style.uiScaleRatio
 
-              anchors.fill: parent
-              anchors.leftMargin: Style.marginM
-              anchors.rightMargin: Style.marginM
-              anchors.topMargin: Style.marginM
-              anchors.bottomMargin: Style.marginM
-              spacing: Style.marginXS
-
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.marginS
-
-                NText {
-                  Layout.fillWidth: true
-                  text: modelData.hostText
-                  elide: Text.ElideRight
-                  font.pointSize: Style.fontSizeS
-                  font.weight: Font.DemiBold
-                  color: Color.mOnSurface
-                }
-
-                NText {
-                  text: modelData.typeText
-                  font.pointSize: Style.fontSizeS * 0.88
-                  color: Qt.alpha(Color.mOnSurface, 0.55)
-                }
+              Image {
+                anchors.fill: parent
+                visible: itemData?.clientIconKind === "file"
+                source: visible ? (itemData?.clientIcon ?? "") : ""
+                sourceSize.width: Math.round(18 * Style.uiScaleRatio)
+                sourceSize.height: Math.round(18 * Style.uiScaleRatio)
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                antialiasing: true
               }
 
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.marginS
-
-                NText {
-                  Layout.fillWidth: true
-                  text: modelData.ruleText
-                  elide: Text.ElideRight
-                  font.pointSize: Style.fontSizeS * 0.92
-                  color: Qt.alpha(Color.mOnSurface, 0.72)
-                }
-
-                NText {
-                  text: modelData.transferText
-                  font.pointSize: Style.fontSizeS * 0.9
-                  color: Qt.alpha(Color.mOnSurface, 0.62)
-                }
+              NIcon {
+                anchors.centerIn: parent
+                visible: itemData?.clientIconKind !== "file"
+                icon: itemData?.clientIcon ?? "world"
+                pointSize: Math.round(Style.fontSizeS)
+                color: Qt.alpha(Color.mOnSurface, 0.82)
               }
+            }
 
-              NText {
-                Layout.fillWidth: true
-                text: modelData.chainText
-                wrapMode: Text.WordWrap
-                font.pointSize: Style.fontSizeS * 0.9
-                color: Qt.alpha(Color.mOnSurface, 0.6)
-              }
+            NText {
+              Layout.fillWidth: true
+              Layout.alignment: Qt.AlignVCenter
+              text: itemData?.clientName ?? ""
+              elide: Text.ElideRight
+              font.pointSize: Style.fontSizeS
+              font.weight: Font.DemiBold
+              color: Color.mOnSurface
+            }
+
+            NText {
+              Layout.alignment: Qt.AlignVCenter
+              text: itemData?.statusText ?? "Active"
+              font.pointSize: Style.fontSizeS * 0.92
+              font.weight: Font.Medium
+              color: root.statusColor(itemData?.statusText ?? "Active")
+            }
+          }
+
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.marginM
+
+            NText {
+              Layout.fillWidth: true
+              Layout.alignment: Qt.AlignVCenter
+              text: itemData?.policyText ?? "Direct"
+              elide: Text.ElideRight
+              font.pointSize: Style.fontSizeS * 0.78
+              color: Qt.alpha(Color.mOnSurface, 0.72)
+            }
+
+            NText {
+              Layout.alignment: Qt.AlignVCenter
+              text: itemData?.timeText ?? ""
+              font.pointSize: Style.fontSizeS * 0.78
+              color: Qt.alpha(Color.mOnSurface, 0.6)
             }
           }
         }
@@ -389,6 +312,41 @@ Item {
     }
   }
 
+  Process {
+    id: iconLookupProcess
+
+    property string outputBuffer: ""
+
+    command: [
+      "python3",
+      Qt.resolvedUrl("../scripts/resolve_process_icon.py").toString().replace("file://", ""),
+      root.currentLookupProcess
+    ]
+
+    stdout: SplitParser {
+      onRead: data => {
+        iconLookupProcess.outputBuffer += data;
+      }
+    }
+
+    onExited: function(code, status) {
+      var raw = root.currentLookupProcess;
+      root.currentLookupProcess = "";
+
+      if (code === 0) {
+        try {
+          var result = JSON.parse(iconLookupProcess.outputBuffer || "{}");
+          root.storeResolvedProcessIcon(result);
+        } catch (e) {
+          Logger.w("Clashia", "Failed to parse process icon lookup: " + String(e));
+        }
+      }
+
+      iconLookupProcess.outputBuffer = "";
+      root.runNextIconLookup();
+    }
+  }
+
   function refresh() {
     if (!root.hasApi) {
       root.resetState();
@@ -424,39 +382,288 @@ Item {
     root.activeConnectionCount = connections.length;
     root.memoryText = root.formatBytes(memory);
     root.connectionItems = connections.map(function(connection) {
+      var metadata = connection?.metadata ?? ({});
+      var processName = String((metadata?.process ?? metadata?.processName ?? "")).trim();
+      var host = String(metadata?.host ?? "");
+      var iconDescriptor = root.resolveClientIcon(connection);
+      Logger.i(
+        "Clashia",
+        "Connection debug"
+        + " process=" + (processName || "<empty>")
+        + " host=" + (host || "<empty>")
+        + " destination=" + String(metadata?.destinationIP ?? metadata?.remoteDestination ?? "")
+        + " icon=" + String(iconDescriptor.icon ?? "")
+        + " kind=" + String(iconDescriptor.kind ?? "")
+        + " source=" + String(iconDescriptor.source ?? "")
+        + " matchedBy=" + String(iconDescriptor.matchedBy ?? "")
+        + " matchedKey=" + String(iconDescriptor.matchedKey ?? "")
+        + " tried=" + String((iconDescriptor.triedKeys ?? []).join(","))
+      );
+
       return {
-        hostText: root.buildHostText(connection),
-        typeText: String(connection?.metadata?.network ?? connection?.metadata?.type ?? "").toUpperCase(),
-        ruleText: root.buildRuleText(connection),
-        transferText: "↑ " + root.formatBytes(Number(connection?.upload ?? 0)) + "  ↓ " + root.formatBytes(Number(connection?.download ?? 0)),
-        chainText: root.buildChainText(connection)
+        clientIcon: iconDescriptor.icon,
+        clientIconKind: iconDescriptor.kind,
+        clientName: root.buildClientName(connection),
+        statusText: root.buildStatusText(connection),
+        policyText: root.buildPolicyText(connection),
+        timeText: root.buildTimeText(connection),
+        processName: processName
       };
     });
   }
 
-  function buildHostText(connection) {
+  function buildClientName(connection) {
     var metadata = connection?.metadata ?? ({});
     var host = String(metadata?.host ?? "");
     var destination = String(metadata?.destinationIP ?? metadata?.remoteDestination ?? "");
-    if (host && destination)
-      return host + " (" + destination + ")";
-    return host || destination || String(connection?.id ?? "");
+    return host || destination || String(connection?.id ?? "Unknown Client");
   }
 
-  function buildRuleText(connection) {
+  function resolveClientIcon(connection) {
     var metadata = connection?.metadata ?? ({});
     var processName = String(metadata?.process ?? metadata?.processName ?? "");
-    var rule = String(connection?.rule ?? metadata?.rule ?? "");
-    if (processName && rule)
-      return processName + " · " + rule;
-    return processName || rule || "Unknown rule";
+    var processMatch = root.lookupProcessIcon(processName);
+    var matched = processMatch;
+
+    if (matched.icon) {
+      return {
+        icon: matched.icon,
+        kind: "file",
+        source: matched.source,
+        matchedBy: matched.matchedBy,
+        matchedKey: matched.matchedKey,
+        triedKeys: matched.triedKeys
+      };
+    }
+
+    return {
+      icon: "world",
+      kind: "theme",
+      source: "fallback",
+      matchedBy: "",
+      matchedKey: "",
+      triedKeys: processMatch.triedKeys
+    };
   }
 
-  function buildChainText(connection) {
+  function buildStatusText(connection) {
+    var status = String(connection?.status ?? connection?.state ?? connection?.metadata?.status ?? "").toLowerCase();
+
+    if (status === "failed" || status === "failure")
+      return "Failed";
+    if (status === "rejected" || status === "reject")
+      return "Rejected";
+    if (status === "completed" || status === "closed" || status === "done")
+      return "Completed";
+
+    return "Active";
+  }
+
+  function buildPolicyText(connection) {
     var chains = connection?.chains ?? connection?.metadata?.chains ?? [];
-    if (!Array.isArray(chains) || chains.length === 0)
+    var candidate = "";
+
+    if (Array.isArray(chains) && chains.length > 0)
+      candidate = String(chains[chains.length - 1] ?? "");
+
+    if (!candidate)
+      candidate = String(connection?.rule ?? connection?.metadata?.rule ?? connection?.metadata?.specialProxy ?? "Direct");
+
+    return root.resolveFinalProxyName(candidate);
+  }
+
+  function buildTimeText(connection) {
+    return root.formatMeridiemTime(
+      connection?.start ??
+      connection?.startTime ??
+      connection?.metadata?.start ??
+      connection?.metadata?.startTime ??
+      connection?.metadata?.createdAt ??
+      connection?.metadata?.timestamp
+    );
+  }
+
+  function lookupProcessIcon(value) {
+    if (!value) {
+      return {
+        icon: "",
+        source: "",
+        matchedBy: "",
+        matchedKey: "",
+        triedKeys: []
+      };
+    }
+
+    var normalized = root.normalizeAppKey(value);
+    var triedKeys = [];
+    if (!normalized) {
+      return {
+        icon: "",
+        source: "",
+        matchedBy: "",
+        matchedKey: "",
+        triedKeys: triedKeys
+      };
+    }
+
+    triedKeys.push(normalized);
+    if (root.processIconCache[normalized] !== undefined) {
+      var cached = root.processIconCache[normalized];
+      return {
+        icon: String(cached?.icon ?? ""),
+        source: String(cached?.source ?? String(value)),
+        matchedBy: String(cached?.matchedBy ?? ""),
+        matchedKey: String(cached?.matchedKey ?? ""),
+        triedKeys: triedKeys
+      };
+    }
+
+    var parts = String(value).split(/[\\/. _-]+/);
+    for (var i = 0; i < parts.length; i++) {
+      var partKey = root.normalizeAppKey(parts[i]);
+      if (!partKey)
+        continue;
+      if (triedKeys.indexOf(partKey) === -1)
+        triedKeys.push(partKey);
+      if (root.processIconCache[partKey] !== undefined) {
+        var partCached = root.processIconCache[partKey];
+        return {
+          icon: String(partCached?.icon ?? ""),
+          source: String(partCached?.source ?? String(value)),
+          matchedBy: String(partCached?.matchedBy ?? ""),
+          matchedKey: String(partCached?.matchedKey ?? partKey),
+          triedKeys: triedKeys
+        };
+      }
+    }
+
+    root.scheduleIconLookup(String(value), normalized);
+
+    return {
+      icon: "",
+      source: String(value),
+      matchedBy: "",
+      matchedKey: "",
+      triedKeys: triedKeys
+    };
+  }
+
+  function normalizeAppKey(value) {
+    var normalized = String(value ?? "").toLowerCase().trim();
+    normalized = normalized.replace(/\.(desktop|bin|appimage|exe)$/g, "");
+    normalized = normalized.replace(/[^a-z0-9]+/g, "");
+    return normalized;
+  }
+
+  function resolveFinalProxyName(name) {
+    var key = String(name ?? "").trim();
+    if (!key)
       return "Direct";
-    return chains.join(" -> ");
+
+    var trace = root.proxyTraceByName[key];
+    var finalName = String(trace?.finalName ?? "");
+    return finalName || key;
+  }
+
+  function rebindConnectionIcons() {
+    if (!Array.isArray(root.connectionItems) || root.connectionItems.length === 0)
+      return;
+
+    root.connectionItems = root.connectionItems.map(function(item) {
+      var match = root.lookupProcessIcon(item?.processName ?? "");
+      if (!match.icon)
+        return item;
+
+      return {
+        clientIcon: match.icon,
+        clientIconKind: match.icon.indexOf("/") === 0 ? "file" : "theme",
+        clientName: item?.clientName ?? "",
+        statusText: item?.statusText ?? "Active",
+        policyText: item?.policyText ?? "Direct",
+        timeText: item?.timeText ?? "",
+        processName: item?.processName ?? ""
+      };
+    });
+  }
+
+  function scheduleIconLookup(processName, normalized) {
+    if (!processName || !normalized)
+      return;
+    if (root.processIconCache[normalized] !== undefined)
+      return;
+    if (root.currentLookupProcess === processName || root.currentLookupProcess === normalized)
+      return;
+    if (root.pendingIconLookups.indexOf(processName) !== -1)
+      return;
+
+    root.pendingIconLookups = root.pendingIconLookups.concat([processName]);
+    root.runNextIconLookup();
+  }
+
+  function runNextIconLookup() {
+    if (iconLookupProcess.running || root.pendingIconLookups.length === 0)
+      return;
+
+    root.currentLookupProcess = String(root.pendingIconLookups[0] ?? "");
+    root.pendingIconLookups = root.pendingIconLookups.slice(1);
+    iconLookupProcess.outputBuffer = "";
+    iconLookupProcess.running = false;
+    iconLookupProcess.running = true;
+  }
+
+  function storeResolvedProcessIcon(result) {
+    var processName = String(result?.process ?? "");
+    var normalized = root.normalizeAppKey(processName);
+    if (!normalized)
+      return;
+
+    var nextCache = Object.assign({}, root.processIconCache);
+    nextCache[normalized] = {
+      icon: String(result?.icon ?? ""),
+      source: processName,
+      matchedBy: String(result?.matchedBy ?? ""),
+      matchedKey: String(result?.matchedKey ?? "")
+    };
+    root.processIconCache = nextCache;
+
+    Logger.i(
+      "Clashia",
+      "Process icon lookup"
+      + " process=" + (processName || "<empty>")
+      + " icon=" + String(result?.icon ?? "")
+      + " matchedBy=" + String(result?.matchedBy ?? "")
+      + " matchedKey=" + String(result?.matchedKey ?? "")
+    );
+
+    root.rebindConnectionIcons();
+  }
+
+  function statusColor(statusText) {
+    if (statusText === "Failed")
+      return "#d94f4f";
+    if (statusText === "Rejected")
+      return "#c97a22";
+    if (statusText === "Completed")
+      return Qt.alpha(Color.mOnSurface, 0.7);
+    return "#36a269";
+  }
+
+  function formatMeridiemTime(value) {
+    if (!value)
+      return Qt.formatTime(new Date(), "hh:mm:ssAP");
+
+    var parsed = new Date(value);
+    if (isNaN(parsed.getTime())) {
+      var numeric = Number(value);
+      if (!isNaN(numeric) && numeric > 0) {
+        parsed = new Date(numeric < 1000000000000 ? numeric * 1000 : numeric);
+      }
+    }
+
+    if (isNaN(parsed.getTime()))
+      return String(value);
+
+    return Qt.formatTime(parsed, "hh:mm:ssAP");
   }
 
   function formatBytes(bytes) {

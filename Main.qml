@@ -33,6 +33,7 @@ Item {
 
   property string currentProxyName: ""
   property string currentProxyChain: ""
+  property var proxyTraceByName: ({})
   property string globalRoutingMode: "rule"
   property real trafficUp: 0
   property real trafficDown: 0
@@ -168,7 +169,9 @@ Item {
 
       try {
         var result = JSON.parse(proxiesStateProcess.outputBuffer);
-        var proxyState = root.resolveCurrentProxyState(result?.proxies ?? ({}));
+        var proxies = result?.proxies ?? ({});
+        root.proxyTraceByName = root.buildProxyTraceIndex(proxies);
+        var proxyState = root.resolveCurrentProxyState(proxies);
         root.currentProxyName = proxyState.name;
         root.currentProxyChain = proxyState.chain;
         root.publishRuntimeState();
@@ -525,6 +528,18 @@ Item {
     return result;
   }
 
+  function buildProxyTraceIndex(proxies) {
+    var index = ({});
+    var names = Object.keys(proxies ?? ({}));
+
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i];
+      index[name] = root.resolveProxyTrace(name, proxies);
+    }
+
+    return index;
+  }
+
   function isSelectableGroup(type) {
     var normalized = String(type ?? "").toLowerCase();
     return normalized === "selector" ||
@@ -555,6 +570,7 @@ Item {
     if (!pluginApi) return;
     pluginApi.pluginSettings._currentProxyName = root.currentProxyName;
     pluginApi.pluginSettings._currentProxyChain = root.currentProxyChain;
+    pluginApi.pluginSettings._proxyTraceByName = root.proxyTraceByName;
     pluginApi.pluginSettings._routingMode = root.globalRoutingMode;
     pluginApi.pluginSettings._trafficUp = root.trafficUp;
     pluginApi.pluginSettings._trafficDown = root.trafficDown;
