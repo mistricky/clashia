@@ -42,7 +42,7 @@ Item {
   readonly property bool isGlobalMode: normalizedRoutingMode === "global"
   readonly property bool isDirectMode: normalizedRoutingMode === "direct"
   readonly property string panelTitle: isGlobalMode ? "Proxies" : "Proxy groups"
-  readonly property string delayTestUrl: cfg.delayTestUrl ?? defaults.delayTestUrl ?? "https://www.gstatic.com/generate_204"
+  readonly property string defaultDelayTestUrl: "https://www.gstatic.com/generate_204"
   readonly property bool delayTesting: Object.keys(headerTestingByKey).length > 0
   readonly property var effectiveGlobalGroup: findGroup("GLOBAL")
   readonly property string effectiveGlobalCurrent: effectiveGlobalGroup?.current ?? ""
@@ -885,7 +885,7 @@ Item {
         return nodeGroupUrl;
     }
 
-    return root.delayTestUrl;
+    return root.defaultDelayTestUrl;
   }
 
   function resolveProviderDelayTestUrl(name) {

@@ -27,6 +27,11 @@ Item {
   property string apiSecret: ""
   property var proxyGroupTestUrls: ({})
   property var proxyProviderTestUrls: ({})
+  property string subscriptionLabel: ""
+  property string subscriptionUsageText: ""
+  property real subscriptionProgressValue: 0
+  property real subscriptionUsedBytes: 0
+  property real subscriptionRemainingBytes: 0
 
   // Clashia feature toggles
   property bool systemProxyEnabled: !!(cfg.systemProxyEnabled ?? false)
@@ -63,27 +68,8 @@ Item {
       return "failed to connect mihomo api: " + root.externalController;
     return "failed to read mixed-port from mihomo";
   }
-
-  // Subscription info (cached in pluginSettings by Main.qml)
-  readonly property string subscriptionUrl: cfg.subscriptionUrl ?? defaults.subscriptionUrl ?? ""
-  readonly property bool hasSubscription: subscriptionUrl !== ""
-  readonly property string subscriptionHost: {
-    if (!hasSubscription) return "";
-    try {
-      var match = subscriptionUrl.match(/^https?:\/\/([^\/?#]+)/);
-      return match ? match[1] : subscriptionUrl;
-    } catch (e) {
-      return subscriptionUrl;
-    }
-  }
-
-  readonly property real subUpload: cfg.subUpload ?? defaults.subUpload ?? 0
-  readonly property real subDownload: cfg.subDownload ?? defaults.subDownload ?? 0
-  readonly property real subTotal: cfg.subTotal ?? defaults.subTotal ?? 0
-  readonly property bool hasSubData: subTotal > 0
-
-  readonly property real subUsed: subUpload + subDownload
-  readonly property real subUsedRatio: subTotal > 0 ? Math.min(1, subUsed / subTotal) : 0
+  readonly property bool hasSubscription: root.subscriptionLabel !== ""
+  readonly property bool hasSubData: root.subscriptionUsageText !== ""
   // SmartPanel
   readonly property var geometryPlaceholder: panelContainer
 
@@ -130,6 +116,7 @@ Item {
     if (pluginApi) {
       Qt.callLater(function() {
         root.restoreCurrentTab();
+        root.fetchSubscriptionInfo();
         // Re-apply system proxy on startup if it was enabled
         if (root.systemProxyEnabled) {
           setSystemProxyProcess.running = false;
@@ -165,6 +152,7 @@ Item {
 
         // Fetch live state from Clashia API
         root.fetchClashiaConfig();
+        root.fetchSubscriptionInfo();
       } catch (e) {
         Logger.e("Clashia", "Failed to parse config: " + e);
       }
@@ -227,6 +215,43 @@ Item {
     }
   }
 
+  Process {
+    id: fetchProvidersProcess
+    property string outputBuffer: ""
+
+    command: {
+      if (!root.apiBaseUrl) return ["echo"];
+      var args = ["curl", "-s", root.apiBaseUrl + "/providers/proxies", "--max-time", "5"];
+      if (root.apiSecret) args = args.concat(["-H", "Authorization: Bearer " + root.apiSecret]);
+      return args;
+    }
+
+    stdout: SplitParser {
+      onRead: data => {
+        fetchProvidersProcess.outputBuffer += data;
+      }
+    }
+
+    onExited: (code, status) => {
+      if (code !== 0) {
+        root.clearSubscriptionInfo();
+        fetchProvidersProcess.outputBuffer = "";
+        Logger.w("Clashia", "Failed to fetch provider metadata from mihomo");
+        return;
+      }
+
+      try {
+        var result = JSON.parse(fetchProvidersProcess.outputBuffer);
+        root.applySubscriptionInfo(result?.providers ?? ({}));
+      } catch (e) {
+        root.clearSubscriptionInfo();
+        Logger.w("Clashia", "Failed to parse provider metadata: " + e);
+      }
+
+      fetchProvidersProcess.outputBuffer = "";
+    }
+  }
+
   // Clashia API: patch TUN setting
   Process {
     id: patchTunProcess
@@ -244,6 +269,15 @@ Item {
       if (code !== 0)
         Logger.e("Clashia", "Failed to patch TUN setting");
     }
+  }
+
+  Timer {
+    id: subscriptionPollTimer
+    interval: 30000
+    repeat: true
+    running: !!root.apiBaseUrl
+    triggeredOnStart: true
+    onTriggered: root.fetchSubscriptionInfo()
   }
 
   Process {
@@ -407,14 +441,13 @@ Item {
       SubscriptionSummary {
         hasSubscription: root.hasSubscription
         hasSubData: root.hasSubData
-        emptyText: pluginApi?.tr("panel.subscription.empty") || "Please configure subscription URL in settings"
+        emptyText: pluginApi?.tr("panel.subscription.empty") || "Subscription data unavailable"
         noDataText: pluginApi?.tr("panel.subscription.noData") || "Subscription data not available"
-        subscriptionName: root.subscriptionHost
-        usageText: root.formatBytes(root.subUsed) + " / " + root.formatBytes(root.subTotal)
-        progressValue: root.subUsedRatio
+        subscriptionName: root.subscriptionLabel
+        usageText: root.subscriptionUsageText
+        progressValue: root.subscriptionProgressValue
       }
- 
- 
+
       FeatureToggles {
         systemProxyEnabled: root.systemProxyEnabled
         tunEnabled: root.tunEnabled
@@ -520,6 +553,17 @@ Item {
     fetchConfigProcess.running = true;
   }
 
+  function fetchSubscriptionInfo() {
+    if (!root.apiBaseUrl) {
+      root.clearSubscriptionInfo();
+      return;
+    }
+
+    fetchProvidersProcess.outputBuffer = "";
+    fetchProvidersProcess.running = false;
+    fetchProvidersProcess.running = true;
+  }
+
   function restoreCurrentTab() {
     var saved = pluginApi?.pluginSettings?.currentTab;
     var fallback = defaults.currentTab ?? 0;
@@ -577,6 +621,97 @@ Item {
     trafficScrollAnim.stop();
     root.trafficAnimProgress = 0;
     trafficScrollAnim.start();
+  }
+
+  function clearSubscriptionInfo() {
+    root.subscriptionLabel = "";
+    root.subscriptionUsageText = "";
+    root.subscriptionProgressValue = 0;
+    root.subscriptionUsedBytes = 0;
+    root.subscriptionRemainingBytes = 0;
+  }
+
+  function applySubscriptionInfo(providers) {
+    var info = root.extractSubscriptionInfo(providers);
+    root.subscriptionLabel = info.label;
+    root.subscriptionUsageText = info.usageText;
+    root.subscriptionProgressValue = info.progressValue;
+    root.subscriptionUsedBytes = info.usedBytes;
+    root.subscriptionRemainingBytes = info.remainingBytes;
+  }
+
+  function extractSubscriptionInfo(providers) {
+    var info = {
+      label: "",
+      usageText: "",
+      progressValue: 0,
+      usedBytes: 0,
+      remainingBytes: 0
+    };
+    if (!providers || typeof providers !== "object")
+      return info;
+
+    var names = Object.keys(providers);
+
+    for (var i = 0; i < names.length; i++) {
+      var providerName = names[i];
+      var provider = providers[providerName];
+      var subscriptionInfo = provider?.subscriptionInfo;
+      if (!subscriptionInfo || typeof subscriptionInfo !== "object")
+        continue;
+
+      var upload = Number(subscriptionInfo?.Upload ?? subscriptionInfo?.upload ?? 0);
+      var download = Number(subscriptionInfo?.Download ?? subscriptionInfo?.download ?? 0);
+      var total = Number(subscriptionInfo?.Total ?? subscriptionInfo?.total ?? 0);
+      var used = Math.max(0, upload + download);
+      var remaining = Math.max(0, total - used);
+
+      info.label = String(provider?.name ?? providerName ?? "Subscription").trim() || "Subscription";
+      info.usedBytes = used;
+      info.remainingBytes = remaining;
+      info.progressValue = total > 0 ? Math.max(0, Math.min(1, used / total)) : 0;
+      info.usageText = root.joinSubscriptionParts(root.formatBytes(used), root.formatBytes(remaining));
+      return info;
+    }
+
+    return info;
+  }
+
+  function parseSubscriptionRemaining(text) {
+    var value = String(text ?? "").trim();
+    var patterns = [
+      /^@?剩余流量[:：]?\s*(.+)$/,
+      /^@?Remaining(?:\s+Traffic)?[:：]?\s*(.+)$/i
+    ];
+
+    for (var i = 0; i < patterns.length; i++) {
+      var match = value.match(patterns[i]);
+      if (match)
+        return match[1].trim();
+    }
+
+    return "";
+  }
+
+  function parseSubscriptionExpire(text) {
+    var value = String(text ?? "").trim();
+    var patterns = [
+      /^@?有效期[:：]?\s*(.+)$/,
+      /^@?到期[:：]?\s*(.+)$/,
+      /^@?Expires?(?:\s+At)?[:：]?\s*(.+)$/i
+    ];
+
+    for (var i = 0; i < patterns.length; i++) {
+      var match = value.match(patterns[i]);
+      if (match)
+        return match[1].trim();
+    }
+
+    return "";
+  }
+
+  function joinSubscriptionParts(remaining, expire) {
+    return [remaining, expire].filter(Boolean).join(" / ");
   }
 
   function extractProxyGroupTestUrls(parsed) {

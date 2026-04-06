@@ -6,7 +6,7 @@
     "test": "This string is translated via the plugin API",
     "open-settings": "Open Plugin Settings",
     "subscription": {
-      "empty": "Please configure subscription URL in settings",
+      "empty": "Subscription data unavailable",
       "loading": "Loading...",
       "error": "Failed to fetch subscription info",
       "noHeader": "Server did not return subscription info",
@@ -35,19 +35,8 @@
     }
   },
   "settings": {
-    "iconColor": {
-      "desc": "Color of the bar widget icon.",
-      "label": "Icon color"
-    },
-    "message": {
-      "desc": "Custom message to display in the panel.",
-      "label": "Message",
-      "placeholder": "Enter a message..."
-    },
-    "subscriptionUrl": {
-      "desc": "Subscription URL for fetching Clashia proxy configurations.",
-      "label": "Subscription URL",
-      "placeholder": "https://example.com/subscribe?token=..."
+    "desktopWidget": {
+      "empty": "Desktop widget has no configurable settings."
     },
     "configPath": {
       "desc": "Path to Clashia (Mihomo) configuration file.",
@@ -58,7 +47,6 @@
     }
   },
   "widget": {
-    "tooltip": "Hello World",
     "runtime": {
       "proxy": "Proxy",
       "mode": "Mode",

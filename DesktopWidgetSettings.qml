@@ -1,20 +1,13 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import qs.Commons
-import qs.Services.System
 import qs.Widgets
 
 ColumnLayout {
   id: root
+
   property var pluginApi: null
   property var widgetSettings: null
-
-  readonly property var cfg: pluginApi?.pluginSettings ?? ({})
-  readonly property var defaults: pluginApi?.manifest?.metadata?.defaultSettings ?? ({})
-  readonly property var widget: widgetSettings?.data ?? ({})
-
-  property string valueMessage: widget.message ?? cfg.message ?? defaults.message
 
   spacing: Style.marginM
 
@@ -26,28 +19,11 @@ ColumnLayout {
     spacing: Style.marginM
     Layout.fillWidth: true
 
-    NTextInput {
+    NText {
       Layout.fillWidth: true
-      label: pluginApi?.tr("settings.message.label")
-      description: pluginApi?.tr("settings.message.desc")
-      placeholderText: pluginApi?.tr("settings.message.placeholder")
-      text: root.valueMessage
-      onTextChanged: {
-        root.valueMessage = text;
-        root.saveSettings();
-      }
+      wrapMode: Text.WordWrap
+      text: pluginApi?.tr("settings.desktopWidget.empty") || "Desktop widget has no configurable settings."
+      color: Color.mOnSurfaceVariant
     }
-  }
-
-  function saveSettings() {
-    if (!widgetSettings) {
-      Logger.e("Clashia", "Cannot save settings: widgetSettings is null");
-      return;
-    }
-
-    widgetSettings.data.message = root.valueMessage;
-    widgetSettings.save();
-
-    Logger.d("Clashia", "Per-instance settings saved successfully");
   }
 }

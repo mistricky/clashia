@@ -2,12 +2,13 @@
   "panel": {
     "test": "此字符串通过插件 API 进行翻译。",
     "subscription": {
-      "empty": "请在设置中配置订阅链接",
+      "empty": "订阅信息暂不可用",
       "loading": "加载中...",
       "error": "无法获取订阅信息",
       "noHeader": "服务器未返回订阅信息",
       "noData": "订阅数据暂不可用",
-      "expire": "到期: "
+      "expire": "到期:",
+      "remaining": "剩余"
     },
     "system-proxy": "系统代理",
     "tun": "TUN",
@@ -25,10 +26,8 @@
     }
   },
   "settings": {
-    "subscriptionUrl": {
-      "desc": "用于获取 Clashia 代理配置的订阅链接。",
-      "label": "订阅链接",
-      "placeholder": "https://example.com/subscribe?token=..."
+    "desktopWidget": {
+      "empty": "桌面挂件当前没有可配置项。"
     },
     "configPath": {
       "desc": "Clashia (Mihomo) 配置文件路径。",

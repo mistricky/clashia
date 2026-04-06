@@ -23,17 +23,10 @@
   },
   "metadata": {
     "defaultSettings": {
-      "message": "Hello World",
       "iconColor": "primary",
       "configPath": "~/.config/mihomo/config.yaml",
-      "subscriptionUrl": "",
-      "delayTestUrl": "https://www.gstatic.com/generate_204",
       "globalRoutingMode": "rule",
-      "currentTab": 0,
-      "subUpload": 0,
-      "subDownload": 0,
-      "subTotal": 0,
-      "subExpire": 0
+      "currentTab": 0
     }
   }
 }
